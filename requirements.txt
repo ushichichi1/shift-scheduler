@@ -1,0 +1,6 @@
+streamlit>=1.30
+pulp>=2.7
+jpholiday>=0.1
+openpyxl>=3.1
+gspread>=5.0
+google-auth>=2.0
