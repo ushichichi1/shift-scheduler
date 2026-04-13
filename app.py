@@ -199,14 +199,36 @@ def check_skill_pairing(schedule, names, tiers, num_days, year, month):
     return bad_days, warn_days, ok_days
 
 
+# ユニット種別ごとの配置基準定義
+# (ratio_val, check_night, label, basis)
+UNIT_STANDARDS = {
+    "ICU（特定集中治療室）":   (2,  True,  "2:1", "診療報酬: 特定集中治療室管理料（24時間）"),
+    "HCU（ハイケアユニット）": (4,  True,  "4:1", "診療報酬: ハイケアユニット入院医療管理料（24時間）"),
+    "NICU（新生児ICU）":       (3,  True,  "3:1", "診療報酬: 新生児集中治療室管理料（24時間）"),
+    "GCU（新生児治療回復室）": (6,  True,  "6:1", "診療報酬: 新生児治療回復室入院医療管理料（24時間）"),
+    "SCU（脳卒中ケアユニット）":(3, True,  "3:1", "診療報酬: 脳卒中ケアユニット入院医療管理料（24時間）"),
+    "PICU（小児ICU）":          (2, True,  "2:1", "診療報酬: 小児特定集中治療室管理料（24時間）"),
+    "一般病棟 7:1":             (7,  False, "7:1", "診療報酬: 急性期一般入院料1（日勤帯）"),
+    "一般病棟 10:1":            (10, False, "10:1","診療報酬: 急性期一般入院料4（日勤帯）"),
+    "一般病棟 13:1":            (13, False, "13:1","診療報酬: 急性期一般入院料6（日勤帯）"),
+    "一般病棟 15:1":            (15, False, "15:1","診療報酬: 地域一般入院基本料（日勤帯）"),
+    "回復期リハ病棟":           (13, False, "13:1","診療報酬: 回復期リハビリテーション病棟（日勤帯）"),
+    "地域包括ケア病棟":         (13, False, "13:1","診療報酬: 地域包括ケア病棟入院料（日勤帯）"),
+}
+
+
 def check_staffing_ratio(schedule, names, r_dedicated, r_weekly,
-                          num_days, bed_count, ratio_val, year, month):
+                          num_days, bed_count, ratio_val, year, month,
+                          check_night=False):
     """
-    日別の日勤人数が人員配置基準（7:1 / 10:1 等）を満たすか確認する。
+    日別の人員数が配置基準を満たすか確認する。
+    Args:
+        check_night: True の場合、夜勤帯（夜勤中＝N）も同一基準でチェック（ICU系）
     必要人数 = ceil(病床数 / 配置比)
     Returns:
         shortfalls: list of dict（不足日の情報）
         ok_days: 基準を満たす日数
+        required: 必要人数
     """
     required = max(1, -(-bed_count // ratio_val))  # ceiling division
     wdj = ["月", "火", "水", "木", "金", "土", "日"]
@@ -214,14 +236,22 @@ def check_staffing_ratio(schedule, names, r_dedicated, r_weekly,
     shortfalls = []
     ok_days = 0
     for d in range(num_days):
-        day_staff = sum(1 for s in names if schedule[s][d] == D)
         wd = wdj[(fwd + d) % 7]
+        day_staff = sum(1 for s in names if schedule[s][d] == D)
+        issues = []
         if day_staff < required:
+            issues.append(f"日勤{day_staff}人（必要{required}人）")
+        if check_night:
+            night_staff = sum(1 for s in names if schedule[s][d] == N)
+            if night_staff < required:
+                issues.append(f"夜勤{night_staff}人（必要{required}人）")
+        if issues:
             shortfalls.append({
                 "日": f"{d+1}日({wd})",
                 "日勤人数": day_staff,
+                **({"夜勤人数": sum(1 for s in names if schedule[s][d] == N)} if check_night else {}),
                 "必要人数": required,
-                "不足": required - day_staff,
+                "不足内容": " / ".join(issues),
             })
         else:
             ok_days += 1
@@ -744,15 +774,25 @@ st.sidebar.caption(f"72時間規制: {night_hours}h×夜勤回数≦72h（≦{72
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🏥 人員配置基準")
-nurse_ratio = st.sidebar.selectbox("看護配置基準", ["7:1", "10:1", "13:1", "15:1"],
-                                    key="inp_nurse_ratio")
-_ratio_map = {"7:1": 7, "10:1": 10, "13:1": 13, "15:1": 15}
-_ratio_val = _ratio_map[nurse_ratio]
-bed_count = st.sidebar.number_input("病床数（床）", min_value=1, max_value=200, value=20,
-                                     key="inp_bed_count")
-# 基準: 患者数÷配置比 → 必要看護師数（日勤帯）
-_required_nurses = max(1, -(-bed_count // _ratio_val))  # ceiling division
-st.sidebar.caption(f"日勤帯必要人数: {bed_count}床 ÷ {_ratio_val} = {_required_nurses}人以上")
+unit_type = st.sidebar.selectbox(
+    "ユニット種別",
+    list(UNIT_STANDARDS.keys()),
+    index=0,  # デフォルト: ICU
+    key="inp_unit_type",
+)
+_ratio_val, _check_night, _ratio_label, _basis_label = UNIT_STANDARDS[unit_type]
+bed_count = st.sidebar.number_input(
+    "病床数（床）", min_value=1, max_value=200, value=10,
+    key="inp_bed_count"
+)
+_required_nurses = max(1, -(-bed_count // _ratio_val))
+_scope = "日勤・夜勤（24時間）" if _check_night else "日勤帯"
+st.sidebar.caption(
+    f"基準: {_ratio_label} ／ {_scope}\n"
+    f"必要人数: {bed_count}床 ÷ {_ratio_val} = **{_required_nurses}人以上**"
+)
+st.sidebar.caption(f"根拠: {_basis_label}")
+nurse_ratio = _ratio_label  # 表示用
 
 settings = {
     "year": year, "month": month,
@@ -1100,7 +1140,8 @@ with tab4:
             schedule, names, tiers, r_num_days, r_year, r_month)
         shortfalls_pre, _, _ = check_staffing_ratio(
             schedule, names, r_dedicated, r_weekly,
-            r_num_days, bed_count, _ratio_val, r_year, r_month)
+            r_num_days, bed_count, _ratio_val, r_year, r_month,
+            check_night=_check_night)
 
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("公休日数", f"{r_public_off}日")
@@ -1305,21 +1346,26 @@ with tab4:
         # ── 人員配置基準チェック ─────────────────────────────
         shortfalls, ok_days, req_nurses = check_staffing_ratio(
             schedule, names, r_dedicated, r_weekly,
-            r_num_days, bed_count, _ratio_val, r_year, r_month
+            r_num_days, bed_count, _ratio_val, r_year, r_month,
+            check_night=_check_night
         )
         ratio_label = "✅ 基準適合" if not shortfalls else f"🚨 不足 {len(shortfalls)}日"
-        with st.expander(f"🏥 人員配置基準チェック（{nurse_ratio}） — {ratio_label}",
-                         expanded=bool(shortfalls)):
-            st.caption(f"配置基準: {nurse_ratio} ／ 病床数: {bed_count}床 ／ 日勤帯必要人数: {req_nurses}人以上")
+        scope_label = "日勤・夜勤（24時間）" if _check_night else "日勤帯"
+        with st.expander(
+            f"🏥 人員配置基準チェック — {unit_type}（{nurse_ratio}） — {ratio_label}",
+            expanded=bool(shortfalls)
+        ):
+            st.caption(f"根拠: {_basis_label}")
+            st.caption(f"配置基準: {nurse_ratio} ／ 適用範囲: {scope_label} ／ 病床数: {bed_count}床 ／ 必要人数: {req_nurses}人以上")
             rc1, rc2, rc3 = st.columns(3)
             rc1.metric("🚨 不足日数", f"{len(shortfalls)}日",
                        delta="要対応" if shortfalls else None, delta_color="inverse")
             rc2.metric("✅ 基準達成", f"{ok_days}日")
-            rc3.metric("必要人数", f"{req_nurses}人/日")
+            rc3.metric("必要人数", f"{req_nurses}人/{scope_label}")
             if shortfalls:
                 st.dataframe(pd.DataFrame(shortfalls), use_container_width=True, hide_index=True)
             else:
-                st.success(f"全{r_num_days}日、日勤帯 {req_nurses}人以上を確保しています。")
+                st.success(f"全{r_num_days}日、{scope_label} {req_nurses}人以上を確保しています。")
 
         with st.expander("📈 日別集計", expanded=False):
             summary_data = {"日付": [f"{d+1}" for d in range(r_num_days)]}
@@ -1394,7 +1440,8 @@ with tab5:
         _bp, _wp, _okp = check_skill_pairing(_schedule, _names, _tiers, _r_num_days, _r_year, _r_month)
         _sf, _okd, _req = check_staffing_ratio(
             _schedule, _names, _r_dedicated, _r_weekly,
-            _r_num_days, bed_count, _ratio_val, _r_year, _r_month)
+            _r_num_days, bed_count, _ratio_val, _r_year, _r_month,
+            check_night=_check_night)
         _total_missed = sum(len(v) for v in _missed.values())
         _nc = {s: _schedule[s].count(N) for s in _names}
         _nc_reg = [v for s, v in _nc.items()
