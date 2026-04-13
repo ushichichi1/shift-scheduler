@@ -158,7 +158,7 @@ SETTINGS_KEYS = [
 class Staff:
     def __init__(self, name, tier, dedicated=False, weekly_days=None, prev_month="",
                  night_min=None, night_max=None, consec_max=None,
-                 work_days=None, no_holiday=False):
+                 work_days=None, no_holiday=False, short_time=False):
         self.name = name
         self.tier = tier
         self.dedicated = dedicated
@@ -169,6 +169,7 @@ class Staff:
         self.consec_max = consec_max    # None=設定値を使用, int=個別の連勤上限
         self.work_days = work_days      # None=全曜日, set of ints (0=月..6=日)
         self.no_holiday = no_holiday    # True=祝日勤務不可
+        self.short_time = short_time    # True=時短勤務（育児・介護）→日勤をSTに置換
     @property
     def is_parttime(self):
         return self.weekly_days is not None
@@ -729,7 +730,7 @@ def _write_gsheet_one(sh, result):
 # ============================================================
 
 def build_and_solve(staff_list, requests, settings, num_patterns=1,
-                    night_hours=16, night_72h_mode="none"):
+                    night_hours=16, night_72h_mode="none", op_rules=None):
     """勤務表を num_patterns パターン生成して返す (list of result dict)"""
     year     = settings.get("year") or 2026
     month    = settings.get("month") or 5
@@ -769,6 +770,7 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
     consec_max_ind = {s.name: s.consec_max for s in staff_list}
     work_days_map = {s.name: s.work_days for s in staff_list}
     no_holiday_map = {s.name: s.no_holiday for s in staff_list}
+    short_time_map = {s.name: s.short_time for s in staff_list}
 
     fulltime  = [n for n in names if weekly[n] is None]
     parttime  = [n for n in names if weekly[n] is not None]
@@ -924,6 +926,16 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
                 prob += x[s, d, L] == 0   # 専従は遅出なし
                 prob += x[s, d, ST] == 0  # 専従は時短なし
                 prob += x[s, d, LD] == 0  # 専従は長日勤なし
+    # 時短スタッフ: 通常日勤(D)→時短(ST)に強制、夜勤系/長日勤禁止
+    for s in names:
+        if not short_time_map.get(s):
+            continue
+        for d in days:
+            prob += x[s, d, D] == 0   # 通常日勤→禁止（STで代替）
+            prob += x[s, d, N] == 0   # 夜勤禁止
+            prob += x[s, d, SN] == 0  # 短夜勤禁止
+            prob += x[s, d, LD] == 0  # 長日勤禁止（12h拘束は時短の趣旨に反する）
+            # 早出・遅出は許可（施設による）
     # 休暇(V)日の事前計算（パートタイム目標調整・V制約で使用）
     vacation_days = {}  # {staff_name: set of day_indices}
     for s, reqs_s in requests.items():
@@ -1010,6 +1022,46 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
                 night_72h_over[s] = v72
         mode_label = "ハード制約" if night_72h_mode == "strict" else "ソフト制約"
         print(f"  72時間規制: N×{night_hours}h + 準×{sn_hours}h ≦ 72h [{mode_label}]")
+
+    # ── 運用条件ルール（op_rules）──
+    if op_rules is None:
+        op_rules = {}
+    ld_sn_pen = {}  # 長日勤→翌日短夜勤ペナルティ変数（softモード用）
+    ld_consec_pen = {}  # 長日勤連続ペナルティ変数
+
+    # LD→SN（長日勤翌日の短夜勤）: strict=禁止, soft=ペナルティ, none=許可
+    ld_sn_mode = op_rules.get("ld_sn", "none")
+    if ld_sn_mode in ("strict", "soft"):
+        idx_ls = 0
+        for s in fulltime:
+            if dedicated[s]:
+                continue
+            for d in days[:-1]:
+                if ld_sn_mode == "strict":
+                    prob += x[s, d, LD] + x[s, d+1, SN] <= 1
+                else:
+                    v = pulp.LpVariable(f"ld_sn_{idx_ls}", cat=pulp.LpBinary)
+                    prob += v >= x[s, d, LD] + x[s, d+1, SN] - 1
+                    ld_sn_pen[idx_ls] = v
+                    idx_ls += 1
+        print(f"  LD→SN制約: [{ld_sn_mode}]")
+
+    # 長日勤連続禁止: strict=2連続禁止, soft=ペナルティ, none=許可
+    ld_consec_mode = op_rules.get("ld_consecutive", "none")
+    if ld_consec_mode in ("strict", "soft"):
+        idx_lc = 0
+        for s in names:
+            if dedicated.get(s) or short_time_map.get(s):
+                continue
+            for d in days[:-1]:
+                if ld_consec_mode == "strict":
+                    prob += x[s, d, LD] + x[s, d+1, LD] <= 1
+                else:
+                    v = pulp.LpVariable(f"ld_cc_{idx_lc}", cat=pulp.LpBinary)
+                    prob += v >= x[s, d, LD] + x[s, d+1, LD] - 1
+                    ld_consec_pen[idx_lc] = v
+                    idx_lc += 1
+        print(f"  長日勤連続制約: [{ld_consec_mode}]")
 
     for s in parttime:
         for d in days:
@@ -1256,6 +1308,10 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
     )
     if night_min_miss:
         obj += 40 * pulp.lpSum(night_min_miss[s] for s in night_min_miss)
+    if ld_sn_pen:
+        obj += 30 * pulp.lpSum(ld_sn_pen[i] for i in ld_sn_pen)
+    if ld_consec_pen:
+        obj += 20 * pulp.lpSum(ld_consec_pen[i] for i in ld_consec_pen)
     prob += obj
 
     # ============================================================
@@ -1318,7 +1374,8 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
             "settings": settings, "requests": requests,
             "holidays": holidays, "weekends": weekends,
             "public_off": public_off, "weekly": weekly,
-            "dedicated": dedicated, "missed_requests": missed_requests,
+            "dedicated": dedicated, "short_time": short_time_map,
+            "missed_requests": missed_requests,
             "pattern_num": pat_num,
         }
         all_results.append(result)

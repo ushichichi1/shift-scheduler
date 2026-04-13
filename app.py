@@ -319,6 +319,7 @@ def _staff_to_df(staff_list):
         rows.append({
             "名前": s.name, "Tier": s.tier,
             "夜勤専従": s.dedicated,
+            "時短": s.short_time,
             "週勤務": s.weekly_days,
             "前月末": s.prev_month or "",
             "夜勤Min": s.night_min,
@@ -377,6 +378,7 @@ def _default_staff():
         "名前": ["スタッフA", "スタッフB", "スタッフC", "スタッフD", "スタッフE"],
         "Tier": ["A", "A", "AB", "C", "C"],
         "夜勤専従": [False, False, False, False, False],
+        "時短": [False, False, False, False, False],
         "週勤務": [None, None, None, None, None],
         "前月末": ["", "", "", "", ""],
         "夜勤Min": [None, None, None, None, None],
@@ -837,6 +839,30 @@ else:
     st.sidebar.caption(f"✅ 制約なし（結果画面でのみ警告表示）")
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("📋 運用条件ルール")
+
+_rule_options = ["🚫 必ず準拠", "⚠ なるべく準拠", "✅ 許容"]
+_rule_map = {"🚫 必ず準拠": "strict", "⚠ なるべく準拠": "soft", "✅ 許容": "none"}
+
+ld_sn_label = st.sidebar.radio(
+    "長日勤→翌日短夜勤",
+    _rule_options, index=0,
+    key="inp_ld_sn",
+    help="長日勤(12h)の翌日に短夜勤(12h)を入れるか"
+)
+ld_consec_label = st.sidebar.radio(
+    "長日勤の連続禁止",
+    _rule_options, index=1,
+    key="inp_ld_consec",
+    help="長日勤(12h)を2日連続で割り当てるか"
+)
+
+op_rules = {
+    "ld_sn": _rule_map[ld_sn_label],
+    "ld_consecutive": _rule_map[ld_consec_label],
+}
+
+st.sidebar.markdown("---")
 st.sidebar.subheader("🏥 人員配置基準")
 unit_type = st.sidebar.selectbox(
     "ユニット種別",
@@ -992,6 +1018,7 @@ with tab1:
             "名前": st.column_config.TextColumn("名前", width="medium"),
             "Tier": st.column_config.SelectboxColumn("Tier", options=["A", "AB", "B", "C"], width="small"),
             "夜勤専従": st.column_config.CheckboxColumn("夜勤専従", width="small"),
+            "時短": st.column_config.CheckboxColumn("時短", width="small"),
             "週勤務": st.column_config.NumberColumn("週勤務", min_value=1, max_value=7, step=1, width="small"),
             "前月末": st.column_config.SelectboxColumn("前月末", options=["", "夜", "明"], width="small"),
             "夜勤Min": st.column_config.NumberColumn("夜勤Min", min_value=0, max_value=15, step=1, width="small"),
@@ -1015,7 +1042,7 @@ with tab1:
 # ============================================================
 with tab2:
     st.subheader(f"勤務希望 — {year}年{month}月（{num_days}日間）")
-    st.caption("日/夜/休/研/夜不/休暇/明休 を入力（空欄=希望なし）")
+    st.caption("日/夜/休/研/夜不/休暇/明休 を入力（空欄=希望なし）　※夜勤専従は早出・遅出を選択しないでください")
 
     staff_names = [n for n in edited_staff["名前"].dropna().tolist() if str(n).strip()]
 
@@ -1111,13 +1138,15 @@ with tab3:
                 if not work_days:
                     work_days = None
             no_hol = bool(row.get("祝日不可", False))
+            short_t = bool(row.get("時短", False))
             staff_list.append(Staff(name, tier, ded, weekly, prev,
-                                     n_min, n_max, c_max, work_days, no_hol))
+                                     n_min, n_max, c_max, work_days, no_hol, short_t))
 
         if not staff_list:
             st.error("スタッフが0人です")
         else:
             reqs_dict = {}
+            dedicated_names = {s.name for s in staff_list if s.dedicated}
             for _, row in edited_reqs.iterrows():
                 name = str(row["名前"]).strip()
                 if not name:
@@ -1129,6 +1158,13 @@ with tab3:
                         rq[d] = SHIFT_REVERSE[val]
                     elif val and val in (D, N, O, R):
                         rq[d] = val
+                # 夜勤専従: 早出・遅出の希望を除外
+                if name in dedicated_names:
+                    dropped = [d for d, v in rq.items() if v in (E, L)]
+                    if dropped:
+                        st.warning(f"⚠ {name}（専従）: {len(dropped)}日分の早出/遅出希望を無視しました")
+                        for d in dropped:
+                            del rq[d]
                 if rq:
                     reqs_dict[name] = rq
 
@@ -1139,7 +1175,8 @@ with tab3:
                     results = build_and_solve(staff_list, reqs_dict, settings,
                                               num_patterns=num_patterns,
                                               night_hours=night_hours,
-                                              night_72h_mode=night_72h_mode)
+                                              night_72h_mode=night_72h_mode,
+                                              op_rules=op_rules)
 
             console_output = console.getvalue()
 
