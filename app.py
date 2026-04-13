@@ -789,7 +789,26 @@ st.sidebar.subheader("⚖ コンプライアンス設定")
 shift_system = st.sidebar.radio("交代制", ["二交代（16h夜勤）", "三交代（8h夜勤）"],
                                  horizontal=False, key="inp_shift_system")
 night_hours = 16 if shift_system.startswith("二") else 8
-st.sidebar.caption(f"72時間規制: {night_hours}h×夜勤回数≦72h（≦{72//night_hours}回）")
+
+_72h_limit = 72 // night_hours
+night_72h_mode_label = st.sidebar.radio(
+    f"72時間規制（≦{_72h_limit}回/月）",
+    ["🚫 必ず準拠（ハード制約）", "⚠ なるべく準拠（ソフト制約）", "✅ 許容（チェックのみ）"],
+    index=2,
+    key="inp_72h_mode",
+)
+_72h_mode_map = {
+    "🚫 必ず準拠（ハード制約）": "strict",
+    "⚠ なるべく準拠（ソフト制約）": "soft",
+    "✅ 許容（チェックのみ）": "none",
+}
+night_72h_mode = _72h_mode_map[night_72h_mode_label]
+if night_72h_mode == "strict":
+    st.sidebar.caption(f"✅ {night_hours}h×夜勤回数 を必ず72h以内に収めます（上限{_72h_limit}回）")
+elif night_72h_mode == "soft":
+    st.sidebar.caption(f"⚠ 72h超過を最小化しますが、達成できない場合は許容します")
+else:
+    st.sidebar.caption(f"✅ 制約なし（結果画面でのみ警告表示）")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🏥 人員配置基準")
@@ -1092,7 +1111,9 @@ with tab3:
                 console = io.StringIO()
                 with contextlib.redirect_stdout(console):
                     results = build_and_solve(staff_list, reqs_dict, settings,
-                                              num_patterns=num_patterns)
+                                              num_patterns=num_patterns,
+                                              night_hours=night_hours,
+                                              night_72h_mode=night_72h_mode)
 
             console_output = console.getvalue()
 

@@ -709,7 +709,8 @@ def _write_gsheet_one(sh, result):
 # ソルバー
 # ============================================================
 
-def build_and_solve(staff_list, requests, settings, num_patterns=1):
+def build_and_solve(staff_list, requests, settings, num_patterns=1,
+                    night_hours=16, night_72h_mode="none"):
     """勤務表を num_patterns パターン生成して返す (list of result dict)"""
     year     = settings.get("year") or 2026
     month    = settings.get("month") or 5
@@ -953,6 +954,25 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1):
         nm_over = pulp.LpVariable(f"nmax_over_{s}", lowBound=0)
         prob += nm_over >= total_n - s_max
         night_max_over[s] = nm_over
+    # 72時間規制（日本看護協会ガイドライン）
+    # night_hours: 1夜勤あたりの時間数（二交代=16h, 三交代=8h）
+    # night_72h_mode: "strict"=ハード制約, "soft"=ペナルティ, "none"=チェックなし
+    night_72h_max = 72 // night_hours  # 上限回数（16h→4回, 8h→9回）
+    night_72h_over = {}  # softモード用ペナルティ変数
+    if night_72h_mode in ("strict", "soft"):
+        for s in fulltime:
+            if dedicated[s]:
+                continue  # 夜勤専従は対象外
+            total_n = pulp.lpSum(x[s, d, N] for d in days)
+            if night_72h_mode == "strict":
+                prob += total_n <= night_72h_max
+            else:  # soft
+                v72 = pulp.LpVariable(f"n72over_{s}", lowBound=0)
+                prob += v72 >= total_n - night_72h_max
+                night_72h_over[s] = v72
+        mode_label = "ハード制約" if night_72h_mode == "strict" else "ソフト制約"
+        print(f"  72時間規制({night_hours}h/夜勤): 上限{night_72h_max}回 [{mode_label}]")
+
     for s in parttime:
         for d in days:
             prob += x[s, d, N] == 0
@@ -1186,6 +1206,7 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1):
         + 70 * pulp.lpSum(day_short[d] for d in days)      # 日勤最低人数不足
         + 60 * (n_max_var - n_min_var)                     # 夜勤均等
         + 50 * pulp.lpSum(a_miss[d] for d in days)         # Aリーダー欠
+        + 35 * pulp.lpSum(night_72h_over[s] for s in night_72h_over)  # 72h超過（softモード）
         + 25 * pulp.lpSum(night_max_over[s] for s in night_max_over)  # Max超過
         + 10 * pulp.lpSum(night_dev[s] for s in night_dev) # 専従の推奨偏差
         + 8  * (max_off - min_off)
