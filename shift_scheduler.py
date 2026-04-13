@@ -816,9 +816,38 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
 
     # ============================================================
     prob = pulp.LpProblem("NurseShift", pulp.LpMinimize)
-    x = pulp.LpVariable.dicts(
-        "x", ((s, d, t) for s in names for d in days for t in SHIFTS),
-        cat=pulp.LpBinary)
+
+    # --- 変数削減: スタッフ属性に応じて不要なシフト変数を除外 ---
+    _excluded = set()  # (s, t) の組: このスタッフにこのシフトは不要
+    for s in names:
+        if dedicated.get(s):
+            # 専従: 日勤系(R/E/L/ST/LD)は不要（Dは希望日のみ後で個別処理）
+            for t in [R, E, L, ST, LD]:
+                _excluded.add((s, t))
+        if short_time_map.get(s):
+            # 時短: D/N/SN/LD は不要
+            for t in [D, N, SN, LD]:
+                _excluded.add((s, t))
+
+    # 有効な(s,d,t)のみ変数を生成
+    _valid_keys = [(s, d, t) for s in names for d in days for t in SHIFTS
+                   if (s, t) not in _excluded]
+    x_real = pulp.LpVariable.dicts("x", _valid_keys, cat=pulp.LpBinary)
+
+    # 除外された変数はゼロ定数で代替（制約式をそのまま使えるように）
+    _zero = pulp.LpAffineExpression()  # 常に0
+    class _XProxy:
+        """存在しないキーは0を返すプロキシ"""
+        def __init__(self, real):
+            self._r = real
+        def __getitem__(self, key):
+            return self._r.get(key, _zero)
+    x = _XProxy(x_real)
+
+    n_total = len(_valid_keys)
+    n_saved = len(names) * num_days * len(SHIFTS) - n_total
+    if n_saved > 0:
+        print(f"  変数削減: {n_saved}個除外 → {n_total}個（{n_saved/(n_saved+n_total)*100:.0f}%削減）")
 
     # --- ハード制約 ---
     for s in names:
@@ -914,28 +943,14 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
         for d in days[:-1]:
             prob += x[s, d, O] + x[s, d+1, N] <= 1
             prob += x[s, d, O] + x[s, d+1, SN] <= 1
-    # 夜勤専従: 希望がない限り日勤系なし（夜/明/休のみ）
+    # 夜勤専従: 希望がない限り日勤(D)なし（R/E/L/ST/LDは変数削減で除外済み）
     for s in fulltime:
         if dedicated[s]:
             day_reqs = {d for d, t in requests.get(s, {}).items() if t == D}
             for d in days:
                 if (d + 1) not in day_reqs:
                     prob += x[s, d, D] == 0
-                prob += x[s, d, R] == 0   # 専従は研修なし
-                prob += x[s, d, E] == 0   # 専従は早出なし
-                prob += x[s, d, L] == 0   # 専従は遅出なし
-                prob += x[s, d, ST] == 0  # 専従は時短なし
-                prob += x[s, d, LD] == 0  # 専従は長日勤なし
-    # 時短スタッフ: 通常日勤(D)→時短(ST)に強制、夜勤系/長日勤禁止
-    for s in names:
-        if not short_time_map.get(s):
-            continue
-        for d in days:
-            prob += x[s, d, D] == 0   # 通常日勤→禁止（STで代替）
-            prob += x[s, d, N] == 0   # 夜勤禁止
-            prob += x[s, d, SN] == 0  # 短夜勤禁止
-            prob += x[s, d, LD] == 0  # 長日勤禁止（12h拘束は時短の趣旨に反する）
-            # 早出・遅出は許可（施設による）
+    # 時短スタッフ: D/N/SN/LDは変数削減で除外済み。早出・遅出は許可。
     # 休暇(V)日の事前計算（パートタイム目標調整・V制約で使用）
     vacation_days = {}  # {staff_name: set of day_indices}
     for s, reqs_s in requests.items():
@@ -1317,7 +1332,13 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
     # ============================================================
     # 複数パターン生成ループ
     # ============================================================
-    solver = pulp.PULP_CBC_CMD(timeLimit=time_limit, msg=False)
+    # HiGHS優先（Python API）、なければCBCフォールバック
+    try:
+        solver = pulp.HiGHS(timeLimit=time_limit, msg=False)
+        print("  ソルバー: HiGHS")
+    except Exception:
+        solver = pulp.PULP_CBC_CMD(timeLimit=time_limit, msg=False)
+        print("  ソルバー: CBC（HiGHS未対応のためフォールバック）")
     # 夜勤の総割当数（差分制約の閾値計算用）
     total_night_slots = night_count * num_days  # 例: 2×31=62
     min_diff = max(int(total_night_slots * 0.3), night_count * 2)  # 30%以上変える
