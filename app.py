@@ -43,6 +43,98 @@ st.markdown("""
 WEEKDAY_MAP = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
 WEEKDAY_REV = {v: k for k, v in WEEKDAY_MAP.items()}
 
+# ============================================================
+# 日本看護協会 夜勤ガイドラインチェック
+# ============================================================
+def check_nursing_guidelines(schedule, names, tiers, r_dedicated):
+    """
+    日本看護協会「夜勤・交代制勤務に関するガイドライン（2013年）」チェック
+    Returns:
+        violations: list of dict  — 違反（赤表示）
+        warnings:   list of dict  — 注意（黄表示）
+        ok_list:    list of str   — 適合スタッフ名
+    """
+    violations = []
+    warnings = []
+    ok_list = []
+
+    for s in names:
+        shifts = schedule[s]  # 0-indexed, len = num_days
+        is_dedicated = r_dedicated.get(s, False)
+        issues = []
+
+        # ── 1. 月の夜勤回数（8回以内）────────────────────────────
+        night_count = shifts.count(N)
+        if is_dedicated:
+            # 専従はガイドライン上「夜勤専従者」扱いのため対象外
+            pass
+        elif night_count > 8:
+            issues.append({
+                "rule": "夜勤回数", "level": "violation",
+                "detail": f"{night_count}回（上限8回超過）"
+            })
+        elif night_count == 8:
+            issues.append({
+                "rule": "夜勤回数", "level": "warning",
+                "detail": f"{night_count}回（上限8回ちょうど）"
+            })
+
+        # ── 2. 連続夜勤（2回以内）───────────────────────────────
+        # N → A → (N → A ...) の繰り返しをカウント
+        # 3回以上連続する夜勤サイクルを検出
+        i = 0
+        consec = 0
+        max_consec = 0
+        consec_start = -1
+        while i < len(shifts):
+            if shifts[i] == N:
+                if consec == 0:
+                    consec_start = i + 1  # 1-indexed day
+                consec += 1
+                max_consec = max(max_consec, consec)
+                i += 2  # N の翌日は A のためスキップ
+            else:
+                consec = 0
+                i += 1
+        if max_consec > 2:
+            issues.append({
+                "rule": "連続夜勤", "level": "violation",
+                "detail": f"最大{max_consec}連続（上限2回超過）"
+            })
+
+        # ── 3. 勤務間インターバル（11時間以上）──────────────────
+        # ハード制約で A→O/N が保証されているが念のため A→D を検出
+        interval_violations = []
+        for d in range(len(shifts) - 1):
+            if shifts[d] == A and shifts[d + 1] == D:
+                interval_violations.append(f"{d + 2}日")
+        if interval_violations:
+            issues.append({
+                "rule": "インターバル", "level": "violation",
+                "detail": f"明け翌日に日勤: {', '.join(interval_violations)}（11時間未満の疑い）"
+            })
+
+        # ── 4. 夜勤後の休息（明け+休みの連続）──────────────────
+        # N → A の翌日が必ず O/V/N であることを確認（A→D は上記で検出済み）
+        for d in range(len(shifts) - 1):
+            if shifts[d] == N and d + 1 < len(shifts) and shifts[d + 1] != A:
+                issues.append({
+                    "rule": "夜勤後の明け", "level": "violation",
+                    "detail": f"{d + 1}日: 夜勤翌日が明けでない（{shifts[d+1]}）"
+                })
+
+        # ── 集計 ─────────────────────────────────────────────
+        v_issues = [x for x in issues if x["level"] == "violation"]
+        w_issues = [x for x in issues if x["level"] == "warning"]
+        for item in v_issues:
+            violations.append({"名前": s, "Tier": tiers[s], **item})
+        for item in w_issues:
+            warnings.append({"名前": s, "Tier": tiers[s], **item})
+        if not issues:
+            ok_list.append(s)
+
+    return violations, warnings, ok_list
+
 SHIFT_DISPLAY = {D: "日", N: "夜", O: "休", R: "研",
                  "夜不": "夜不", "休暇": "休暇", "明休": "明休"}
 SHIFT_REVERSE = {"日": D, "夜": N, "休": O, "研": R,
@@ -89,26 +181,27 @@ def _reqs_to_df(reqs_dict, staff_list, num_days):
     return pd.DataFrame(req_rows)
 
 
+_SETTINGS_WIDGET_MAP = {
+    "year": "inp_year", "month": "inp_month",
+    "min_day_staff": "inp_min_day", "night_staff_count": "inp_night_count",
+    "max_night_regular": "inp_max_n_reg", "pref_night_regular": "inp_pref_n_reg",
+    "max_night_dedicated": "inp_max_n_ded", "pref_night_dedicated": "inp_pref_n_ded",
+    "max_consecutive": "inp_max_consec", "pref_consecutive": "inp_pref_consec",
+    "solver_time_limit": "inp_time_limit",
+}
+
 def _apply_settings(gs_settings):
-    """読み込んだ設定をサイドバーのsession_stateに反映"""
-    mapping = {
-        "year": "inp_year", "month": "inp_month",
-        "min_day_staff": "inp_min_day", "night_staff_count": "inp_night_count",
-        "max_night_regular": "inp_max_n_reg", "pref_night_regular": "inp_pref_n_reg",
-        "max_night_dedicated": "inp_max_n_ded", "pref_night_dedicated": "inp_pref_n_ded",
-        "max_consecutive": "inp_max_consec", "pref_consecutive": "inp_pref_consec",
-        "solver_time_limit": "inp_time_limit",
-    }
-    for src, dst in mapping.items():
+    """読み込んだ設定を _pending_* キーに保存（ウィジェット描画前に反映させるため）"""
+    for src, dst in _SETTINGS_WIDGET_MAP.items():
         v = gs_settings.get(src)
         if v is not None:
-            st.session_state[dst] = int(v)
+            st.session_state[f"_pending_{dst}"] = int(v)
     po = gs_settings.get("public_off_override")
     if po is not None and po != "":
-        st.session_state["inp_po_mode"] = "手動指定"
-        st.session_state["inp_po_val"] = int(po)
+        st.session_state["_pending_inp_po_mode"] = "手動指定"
+        st.session_state["_pending_inp_po_val"] = int(po)
     else:
-        st.session_state["inp_po_mode"] = "自動（土日祝）"
+        st.session_state["_pending_inp_po_mode"] = "自動（土日祝）"
 
 
 def _default_staff():
@@ -289,6 +382,17 @@ if "data_loaded" not in st.session_state:
     st.session_state.data_loaded = False
 
 # ============================================================
+# pending設定をウィジェットキーに反映（ウィジェット描画前に実行）
+# ============================================================
+for _src, _dst in _SETTINGS_WIDGET_MAP.items():
+    _pk = f"_pending_{_dst}"
+    if _pk in st.session_state:
+        st.session_state[_dst] = st.session_state.pop(_pk)
+for _pk, _wk in [("_pending_inp_po_mode", "inp_po_mode"), ("_pending_inp_po_val", "inp_po_val")]:
+    if _pk in st.session_state:
+        st.session_state[_wk] = st.session_state.pop(_pk)
+
+# ============================================================
 # サイドバー: 設定
 # ============================================================
 st.sidebar.title("勤務表設定")
@@ -382,6 +486,27 @@ with tab0:
         st.markdown("### 📤 データを読み込む")
         import_method = st.radio("読み込み方法", ["Excel ファイル", "Google スプレッドシート"],
                                   horizontal=True, key="import_method")
+
+        # ローカルデフォルトファイルが存在する場合に表示
+        import os as _os
+        _default_excel = _os.path.join(_os.path.dirname(__file__), "勤務表_入力.xlsx")
+        if _os.path.exists(_default_excel):
+            if st.button("📁 ローカルファイルを読み込む（勤務表_入力.xlsx）",
+                         use_container_width=True, key="btn_load_local"):
+                try:
+                    with st.spinner("読み込み中..."):
+                        from shift_scheduler import load_input as _load_local
+                        staff_list, reqs, gs_settings = _load_local()
+                    if gs_settings:
+                        _apply_settings(gs_settings)
+                    st.session_state.staff_df = _staff_to_df(staff_list)
+                    st.session_state.requests_df = _reqs_to_df(reqs, staff_list, num_days)
+                    st.session_state.data_loaded = True
+                    st.success(f"✅ {len(staff_list)}人のスタッフを読み込みました")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"読み込みエラー: {e}")
+            st.divider()
 
         if import_method == "Excel ファイル":
             uploaded = st.file_uploader("Excelファイルを選択", type=["xlsx", "xlsm"],
@@ -720,6 +845,54 @@ with tab4:
                     st.warning(f"{s}: {', '.join(f'{d}日' for d in ds)}")
         else:
             st.success("✓ 全希望達成")
+
+        # ── 日本看護協会ガイドラインチェック ─────────────────────
+        violations, warnings_gl, ok_list = check_nursing_guidelines(
+            schedule, names, tiers, r_dedicated
+        )
+        gl_label = "✅ ガイドライン適合" if not violations else f"🚨 ガイドライン違反 {len(violations)}件"
+        with st.expander(f"📋 日本看護協会 夜勤ガイドラインチェック — {gl_label}", expanded=bool(violations)):
+            st.caption("根拠: 日本看護協会「夜勤・交代制勤務に関するガイドライン」(2013年)")
+            gl_col1, gl_col2, gl_col3 = st.columns(3)
+            gl_col1.metric("🚨 違反", f"{len(violations)}件",
+                           delta=None if not violations else "要対応",
+                           delta_color="inverse")
+            gl_col2.metric("⚠ 注意", f"{len(warnings_gl)}件")
+            gl_col3.metric("✅ 適合", f"{len(ok_list)}名")
+
+            st.markdown("##### チェック項目")
+            rules_info = [
+                ("夜勤回数", "月8回以内（夜勤専従者は対象外）"),
+                ("連続夜勤", "連続夜勤2サイクル以内"),
+                ("インターバル", "勤務間隔11時間以上（明け翌日に日勤がないか）"),
+                ("夜勤後の明け", "夜勤翌日は必ず明けシフト"),
+            ]
+            for rule, desc in rules_info:
+                v_cnt = sum(1 for x in violations if x["rule"] == rule)
+                w_cnt = sum(1 for x in warnings_gl if x["rule"] == rule)
+                icon = "🚨" if v_cnt else ("⚠" if w_cnt else "✅")
+                st.markdown(f"- {icon} **{rule}**: {desc}"
+                            + (f" → **{v_cnt}件違反**" if v_cnt else "")
+                            + (f" → {w_cnt}件注意" if w_cnt else ""))
+
+            if violations:
+                st.markdown("##### 🚨 違反一覧")
+                st.dataframe(
+                    pd.DataFrame(violations)[["名前", "Tier", "rule", "detail"]]
+                    .rename(columns={"rule": "項目", "detail": "内容"}),
+                    use_container_width=True, hide_index=True
+                )
+
+            if warnings_gl:
+                st.markdown("##### ⚠ 注意一覧")
+                st.dataframe(
+                    pd.DataFrame(warnings_gl)[["名前", "Tier", "rule", "detail"]]
+                    .rename(columns={"rule": "項目", "detail": "内容"}),
+                    use_container_width=True, hide_index=True
+                )
+
+            if ok_list:
+                st.markdown(f"##### ✅ 全項目適合: {', '.join(ok_list)}")
 
         with st.expander("📈 日別集計", expanded=False):
             summary_data = {"日付": [f"{d+1}" for d in range(r_num_days)]}
