@@ -328,6 +328,8 @@ def _staff_to_df(staff_list):
             "勤務曜日": wd_str,
             "祝日不可": s.no_holiday,
             "土日不可": s.no_weekend,
+            "夜勤研修": s.night_training,
+            "研修夜勤回数": s.night_training_max,
         })
     return pd.DataFrame(rows) if rows else _default_staff()
 
@@ -388,6 +390,8 @@ def _default_staff():
         "勤務曜日": ["", "", "", "", ""],
         "祝日不可": [False, False, False, False, False],
         "土日不可": [False, False, False, False, False],
+        "夜勤研修": [False, False, False, False, False],
+        "研修夜勤回数": [None, None, None, None, None],
     })
 
 
@@ -712,7 +716,8 @@ def _generate_template_excel(year, month, num_staff=20):
 
     # === 共通データ ===
     staff_headers = ["名前", "Tier", "夜勤専従", "時短", "週勤務", "前月末",
-                     "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可"]
+                     "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可",
+                     "夜勤研修", "研修夜勤回数"]
     n_staff_cols = len(staff_headers)
     weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
     first_wd = date(year, month, 1).weekday()
@@ -721,9 +726,9 @@ def _generate_template_excel(year, month, num_staff=20):
     samples_name = ["山田太郎", "佐藤花子", "鈴木一郎"]
     samples_tier = ["A", "AB", "C"]
     samples_extra = [
-        [None, None, None, None, None, None, None, None, None, None],
-        [None, None, None, None, None, None, None, None, None, None],
-        [None, None, "3", None, None, None, None, "月水金", None, None],
+        [None, None, None, None, None, None, None, None, None, None, None, None],
+        [None, None, None, None, None, None, None, None, None, None, None, None],
+        [None, None, "3", None, None, None, None, "月水金", None, None, None, None],
     ]
     total_rows = max(num_staff, len(samples_name))
 
@@ -796,6 +801,8 @@ def _generate_template_excel(year, month, num_staff=20):
         ("勤務曜日", "特定曜日のみ勤務（例:月水金）"),
         ("祝日不可", "ONで祝日に勤務を入れない"),
         ("土日不可", "ONで土日に勤務を入れない"),
+        ("夜勤研修", "ONで夜勤研修中（通常2人+研修1人=MAX3人）"),
+        ("研修夜勤回数", "月間の研修夜勤上限（空欄=制限なし）"),
     ]
     for i, (col_name, desc) in enumerate(col_defs):
         ws_staff.cell(row=legend_start_row + 7 + i, column=1, value=col_name).font = Font(bold=True, size=9)
@@ -944,7 +951,7 @@ def _parse_uploaded_excel(uploaded_file, year, month):
     # 3. 旧分離形式: 「スタッフ一覧」+「勤務希望」
     staff_list = []
     reqs = {}
-    n_staff_cols = 12  # 名前〜土日不可
+    n_staff_cols = 14  # 名前〜研修夜勤回数
 
     if "スタッフ情報" in wb.sheetnames:
         # === 新形式（スタッフ情報 + 勤務希望 2シート） ===
@@ -1226,14 +1233,14 @@ with tab0:
                 ws_st = sh.add_worksheet("スタッフ一覧", rows=30, cols=15)
                 st_rows = [["名前", "Tier", "夜勤専従", "時短", "週勤務", "前月末",
                             "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可",
-                            "", "Tier定義", "説明"]]
-                st_rows.append(["山田太郎", "A", "", "", "", "", "", "", "", "", "", "",
+                            "夜勤研修", "研修夜勤回数", "", "Tier定義", "説明"]]
+                st_rows.append(["山田太郎", "A", "", "", "", "", "", "", "", "", "", "", "", "",
                                 "", "A", "ベテラン・リーダー格"])
-                st_rows.append(["佐藤花子", "AB", "", "", "", "", "", "", "", "", "", "",
+                st_rows.append(["佐藤花子", "AB", "", "", "", "", "", "", "", "", "", "", "", "",
                                 "", "AB", "中堅・リーダー代行可"])
-                st_rows.append(["鈴木一郎", "C", "", "", "3", "", "", "", "", "月水金", "", "",
+                st_rows.append(["鈴木一郎", "C", "", "", "3", "", "", "", "", "月水金", "", "", "", "",
                                 "", "B", "一人立ち済み"])
-                st_rows.append(["", "", "", "", "", "", "", "", "", "", "", "",
+                st_rows.append(["", "", "", "", "", "", "", "", "", "", "", "", "", "",
                                 "", "C", "新人・経験浅い"])
                 ws_st.update(st_rows, "A1")
                 # --- 勤務希望シート ---
@@ -1373,7 +1380,7 @@ with tab1:
                         "Tier": "C", "夜勤専従": False, "時短": False,
                         "週勤務": None, "前月末": "", "夜勤Min": None,
                         "夜勤Max": None, "連勤Max": None, "勤務曜日": "", "祝日不可": False,
-                        "土日不可": False,
+                        "土日不可": False, "夜勤研修": False, "研修夜勤回数": None,
                     })
                 st.session_state.staff_df = pd.concat(
                     [valid_rows, pd.DataFrame(new_rows)], ignore_index=True)
@@ -1390,7 +1397,8 @@ with tab1:
 
     # --- スタッフ情報カラム選択（表示/非表示） ---
     _all_staff_detail_cols = ["Tier", "夜勤専従", "時短", "週勤務", "前月末",
-                              "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可"]
+                              "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可",
+                              "夜勤研修", "研修夜勤回数"]
     if view_mode in ("👤 スタッフ情報", "👤+📝 すべて"):
         with st.expander("⚙ 表示カラム選択", expanded=False):
             _visible_staff_cols = st.multiselect(
@@ -1423,6 +1431,8 @@ with tab1:
 - **勤務曜日**: パート等で特定曜日のみ勤務する場合（例: 月水金）
 - **祝日不可**: ONにすると祝日に勤務を入れません
 - **土日不可**: ONにすると土日に勤務を入れません
+- **夜勤研修**: ONにすると通常夜勤2人に加え3人目（研修枠）として夜勤配置。研修者同士は同日に入りません
+- **研修夜勤回数**: 月間の研修夜勤上限回数（空欄=制限なし）
 """)
 
     if view_mode in ("📝 勤務希望", "👤+📝 すべて"):
@@ -1483,7 +1493,8 @@ with tab1:
 
     # --- 統合DataFrame構築 ---
     _staff_cols = ["Tier", "夜勤専従", "時短", "週勤務", "前月末",
-                   "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可"]
+                   "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可",
+                   "夜勤研修", "研修夜勤回数"]
     _day_cols = [str(d) for d in range(1, num_days + 1)]
 
     # staff_df と requests_df を名前で結合
@@ -1521,6 +1532,8 @@ with tab1:
         "勤務曜日": st.column_config.TextColumn("勤務曜日", width="small", help="例: 月火木"),
         "祝日不可": st.column_config.CheckboxColumn("祝日不可", width="small"),
         "土日不可": st.column_config.CheckboxColumn("土日不可", width="small"),
+        "夜勤研修": st.column_config.CheckboxColumn("夜勤研修", width="small"),
+        "研修夜勤回数": st.column_config.NumberColumn("研修夜勤回数", min_value=1, max_value=15, step=1, width="small"),
     }
     col_config = {}
     # 勤務希望モードでは名前・Tierを読み取り専用に
@@ -1647,8 +1660,11 @@ with tab3:
             no_hol = bool(row.get("祝日不可", False))
             short_t = bool(row.get("時短", False))
             no_we = bool(row.get("土日不可", False))
+            night_tr = bool(row.get("夜勤研修", False))
+            nt_max = int(row["研修夜勤回数"]) if pd.notna(row.get("研修夜勤回数")) else None
             staff_list.append(Staff(name, tier, ded, weekly, prev,
-                                     n_min, n_max, c_max, work_days, no_hol, short_t, no_we))
+                                     n_min, n_max, c_max, work_days, no_hol, short_t,
+                                     no_we, night_tr, nt_max))
 
         if not staff_list:
             st.error("スタッフが0人です")

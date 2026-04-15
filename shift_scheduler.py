@@ -159,7 +159,7 @@ class Staff:
     def __init__(self, name, tier, dedicated=False, weekly_days=None, prev_month="",
                  night_min=None, night_max=None, consec_max=None,
                  work_days=None, no_holiday=False, short_time=False,
-                 no_weekend=False):
+                 no_weekend=False, night_training=False, night_training_max=None):
         self.name = name
         self.tier = tier
         self.dedicated = dedicated
@@ -172,6 +172,8 @@ class Staff:
         self.no_holiday = no_holiday    # True=祝日勤務不可
         self.short_time = short_time    # True=時短勤務（育児・介護）→日勤をSTに置換
         self.no_weekend = no_weekend    # True=土日勤務不可
+        self.night_training = night_training      # True=夜勤研修中（3人目枠）
+        self.night_training_max = night_training_max  # None=制限なし, int=月間研修夜勤上限
     @property
     def is_parttime(self):
         return self.weekly_days is not None
@@ -186,7 +188,7 @@ def create_template():
     # --- スタッフ一覧 ---
     ws1 = wb.active
     ws1.title = "スタッフ一覧"
-    headers = ["名前", "Tier", "夜勤専従", "週勤務", "前月末", "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可"]
+    headers = ["名前", "Tier", "夜勤専従", "週勤務", "前月末", "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可", "夜勤研修", "研修夜勤回数"]
     for i, h in enumerate(headers, 1):
         c = ws1.cell(row=1, column=i, value=h)
         c.font = FONT_H; c.fill = FH; c.border = BDR; c.alignment = CTR
@@ -345,8 +347,14 @@ def _parse_staff_list(rows):
         # 土日不可
         no_we_str = str(row[col_offset+7]).strip() if len(row) > col_offset+7 else ""
         no_we = no_we_str in ("○", "◯", "TRUE", "True", "1")
+        # 夜勤研修
+        nt_str = str(row[col_offset+8]).strip() if len(row) > col_offset+8 else ""
+        night_tr = nt_str in ("○", "◯", "TRUE", "True", "1")
+        # 研修夜勤回数
+        nt_max_str = str(row[col_offset+9]).strip() if len(row) > col_offset+9 else ""
+        nt_max = int(nt_max_str) if nt_max_str.isdigit() else None
         staff.append(Staff(name, tier, ded, weekly, prev, n_min, n_max, c_max,
-                           work_days, no_hol, short_t, no_we))
+                           work_days, no_hol, short_t, no_we, night_tr, nt_max))
     if not staff:
         print("✗ スタッフが0人です")
         sys.exit(1)
@@ -540,8 +548,8 @@ def create_gsheet_template():
     ws1.update_title("スタッフ一覧")
     ws1.update("A1", [["名前", "Tier", "夜勤専従", "週勤務", "前月末",
                         "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可", "土日不可",
-                        "", "列の説明"]])
-    rows = [[n, t, d, w, p, "", "", "", "", "", "", ""] for n, t, d, w, p in SAMPLE_STAFF]
+                        "夜勤研修", "研修夜勤回数", "", "列の説明"]])
+    rows = [[n, t, d, w, p, "", "", "", "", "", "", "", "", ""] for n, t, d, w, p in SAMPLE_STAFF]
     descs = [
         "Tier: A=リーダー AB=サブリーダー B=メンバー1 C=メンバー2",
         "夜勤専従: ○=専従", "週勤務: 空欄=フルタイム 数字=週N日(日勤限定)",
@@ -551,6 +559,8 @@ def create_gsheet_template():
         "勤務曜日: 空欄=全曜日 例:月火木",
         "祝日不可: ○=祝日は勤務しない",
         "土日不可: ○=土日は勤務しない",
+        "夜勤研修: ○=研修中(3人目枠で夜勤配置)",
+        "研修夜勤回数: 月間上限(空欄=制限なし)",
         f"希望は「勤務希望」シートに(最大{MAX_REQUEST_DAYS}日)",
     ]
     for i, r in enumerate(rows):
@@ -787,6 +797,10 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
     no_holiday_map = {s.name: s.no_holiday for s in staff_list}
     no_weekend_map = {s.name: s.no_weekend for s in staff_list}
     short_time_map = {s.name: s.short_time for s in staff_list}
+    night_training_map = {s.name: s.night_training for s in staff_list}
+    night_training_max_map = {s.name: s.night_training_max for s in staff_list}
+    training_staff = [s.name for s in staff_list if s.night_training]
+    non_training   = [n for n in names if not night_training_map.get(n)]
 
     fulltime  = [n for n in names if weekly[n] is None]
     parttime  = [n for n in names if weekly[n] is not None]
@@ -1001,11 +1015,29 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
         # ハード下限
         prob += day_sum >= _hard_min_day
     # 夜勤人数: 夜勤(N) + 短夜勤(SN) の合計
-    for d in days:
-        prob += pulp.lpSum(x[s, d, t] for s in names for t in NIGHT_SHIFTS) == night_count
+    training_short = {}  # 研修夜勤の不足ペナルティ変数
+    if training_staff:
+        # 研修スタッフは通常枠から除外し、3人目枠（≤1人/日）として別管理
+        for d in days:
+            prob += pulp.lpSum(x[s, d, t] for s in non_training for t in NIGHT_SHIFTS) == night_count
+            prob += pulp.lpSum(x[s, d, t] for s in training_staff for t in NIGHT_SHIFTS) <= 1
+        # 研修夜勤回数: 指定値=ぴったりハード、未指定=最低1回
+        for s in training_staff:
+            total_tn = pulp.lpSum(x[s, d, t] for d in days for t in NIGHT_SHIFTS)
+            nt_max = night_training_max_map.get(s)
+            if nt_max is not None:
+                prob += total_tn == nt_max  # 指定回数ぴったり（ハード）
+            else:
+                # 上限なし: 最低1回は入れる（研修ONの意味がないため）
+                prob += total_tn >= 1
+        print(f"  夜勤研修: {len(training_staff)}名 → 通常{night_count}人 + 研修≤1人/日 (MAX3人)")
+    else:
+        for d in days:
+            prob += pulp.lpSum(x[s, d, t] for s in names for t in NIGHT_SHIFTS) == night_count
     # 夜勤Min/Max + 均等配分
     # Min=ハード制約（最低回数）、残り枠を均等配分、Max=ソフト制約
-    ft_non_ded = [s for s in fulltime if not dedicated[s]]
+    # 研修スタッフは通常枠の均等配分から除外（研修夜勤回数は別管理）
+    ft_non_ded = [s for s in fulltime if not dedicated[s] and not night_training_map.get(s)]
     ft_min_total = sum((night_min[s] or 0) for s in ft_non_ded if night_min[s] is not None)
     ft_slots = night_count * num_days
     ded_slots = sum(
@@ -1031,6 +1063,9 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
             # 専従: Max制約のみ（ハード）
             s_max = night_max[s] if night_max[s] is not None else max_n_ded
             prob += total_n <= s_max
+            continue
+        if night_training_map.get(s):
+            # 研修スタッフ: 月間上限は別途設定済み、通常Min/Maxは適用しない
             continue
         # 通常スタッフ: Min=ハード, Max=ソフト
         s_min = night_min[s]
@@ -1363,6 +1398,8 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
         obj += 30 * pulp.lpSum(ld_sn_pen[i] for i in ld_sn_pen)
     if ld_consec_pen:
         obj += 20 * pulp.lpSum(ld_consec_pen[i] for i in ld_consec_pen)
+    if training_short:
+        obj += 150 * pulp.lpSum(training_short[s] for s in training_short)  # 研修夜勤不足
     prob += obj
 
     # ============================================================
