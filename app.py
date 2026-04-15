@@ -989,8 +989,8 @@ settings = {
 # ============================================================
 st.title("🏥 勤務表自動作成ツール")
 
-tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📂 データ入力", "📋 スタッフ一覧", "📝 勤務希望", "⚡ 生成", "📊 結果", "🏠 ダッシュボード"])
+tab0, tab1, tab3, tab4, tab5 = st.tabs(
+    ["📂 データ入力", "📋 スタッフ・勤務希望", "⚡ 生成", "📊 結果", "🏠 ダッシュボード"])
 
 # ============================================================
 # Tab 0: データ入力（テンプレ出力 / アップロード / スプシ）
@@ -1147,19 +1147,19 @@ with tab0:
     if st.session_state.data_loaded:
         n_staff = len(st.session_state.staff_df.dropna(subset=["名前"]))
         n_staff = len([n for n in st.session_state.staff_df["名前"].dropna() if str(n).strip()])
-        st.success(f"✅ データ読み込み済み（{n_staff}人）→ 「スタッフ一覧」「勤務希望」タブで確認・編集できます")
+        st.success(f"✅ データ読み込み済み（{n_staff}人）→ 「スタッフ・勤務希望」タブで確認・編集できます")
     else:
         st.info("💡 テンプレートをDLして記入 → アップロード、またはスプレッドシートから読み込んでください")
 
 # ============================================================
-# Tab 1: スタッフ一覧
+# Tab 1: スタッフ・勤務希望（統合タブ）
 # ============================================================
 with tab1:
-    st.subheader("スタッフ一覧")
+    st.subheader(f"スタッフ・勤務希望 — {year}年{month}月（{num_days}日間）")
 
     # --- スタッフ枠数設定 ---
     current_count = len(st.session_state.staff_df.dropna(subset=["名前"]))
-    col_cnt, col_btn = st.columns([1, 3])
+    col_cnt, col_btn, col_spacer = st.columns([1, 1, 2])
     with col_cnt:
         target_count = st.number_input("スタッフ人数", min_value=1, max_value=100,
                                         value=max(current_count, 5), step=1, key="staff_total_count")
@@ -1171,7 +1171,6 @@ with tab1:
             valid_rows = valid_rows[valid_rows["名前"].str.strip() != ""]
             existing = len(valid_rows)
             if target_count > existing:
-                # 不足分を追加
                 new_rows = []
                 for i in range(target_count - existing):
                     new_rows.append({
@@ -1183,13 +1182,20 @@ with tab1:
                 st.session_state.staff_df = pd.concat(
                     [valid_rows, pd.DataFrame(new_rows)], ignore_index=True)
             elif target_count < existing:
-                # 先頭N人だけ残す
                 st.session_state.staff_df = valid_rows.head(target_count).reset_index(drop=True)
             st.rerun()
 
-    # --- Tier定義パネル ---
-    with st.expander("📖 Tier（スキルランク）の定義", expanded=False):
-        st.markdown("""
+    # --- 表示モード切替 ---
+    view_mode = st.radio(
+        "表示モード",
+        ["👤 スタッフ情報", "📝 勤務希望", "👤+📝 すべて"],
+        horizontal=True, index=2, key="view_mode",
+    )
+
+    # --- 定義パネル（表示モードに応じて出し分け） ---
+    if view_mode in ("👤 スタッフ情報", "👤+📝 すべて"):
+        with st.expander("📖 Tier（スキルランク）の定義", expanded=False):
+            st.markdown("""
 | Tier | 説明 | 夜勤の役割 |
 |------|------|-----------|
 | **A** | ベテラン・リーダー格 | 夜勤リーダー（必ずA/ABが1人以上） |
@@ -1208,43 +1214,9 @@ with tab1:
 - **祝日不可**: ONにすると祝日に勤務を入れません
 """)
 
-    st.caption("行を追加・編集できます。名前をダブルクリックで編集。")
-
-    edited_staff = st.data_editor(
-        st.session_state.staff_df,
-        num_rows="dynamic",
-        column_config={
-            "名前": st.column_config.TextColumn("名前", width="medium"),
-            "Tier": st.column_config.SelectboxColumn("Tier", options=["A", "AB", "B", "C"], width="small"),
-            "夜勤専従": st.column_config.CheckboxColumn("夜勤専従", width="small"),
-            "時短": st.column_config.CheckboxColumn("時短", width="small"),
-            "週勤務": st.column_config.NumberColumn("週勤務", min_value=1, max_value=7, step=1, width="small"),
-            "前月末": st.column_config.SelectboxColumn("前月末", options=["", "夜", "明"], width="small"),
-            "夜勤Min": st.column_config.NumberColumn("夜勤Min", min_value=0, max_value=15, step=1, width="small"),
-            "夜勤Max": st.column_config.NumberColumn("夜勤Max", min_value=0, max_value=15, step=1, width="small"),
-            "連勤Max": st.column_config.NumberColumn("連勤Max", min_value=1, max_value=10, step=1, width="small"),
-            "勤務曜日": st.column_config.TextColumn("勤務曜日", width="small", help="例: 月火木"),
-            "祝日不可": st.column_config.CheckboxColumn("祝日不可", width="small"),
-        },
-        use_container_width=True,
-        key="staff_editor",
-    )
-    st.session_state.staff_df = edited_staff
-
-    if holidays_auto:
-        hol_names = {d.day: name for d, name in jpholiday.month_holidays(year, month)}
-        hol_str = "、".join(f"{d}日({hol_names.get(d, '祝')})" for d in sorted(holidays_auto))
-        st.info(f"🗓 {year}年{month}月の祝日: {hol_str}")
-
-# ============================================================
-# Tab 2: 勤務希望
-# ============================================================
-with tab2:
-    st.subheader(f"勤務希望 — {year}年{month}月（{num_days}日間）")
-
-    # --- シフト種別の定義パネル ---
-    with st.expander("📖 シフト種別の定義", expanded=False):
-        st.markdown("""
+    if view_mode in ("📝 勤務希望", "👤+📝 すべて"):
+        with st.expander("📖 シフト種別の定義", expanded=False):
+            st.markdown("""
 | 記号 | 正式名 | 時間帯 | 備考 |
 |------|--------|--------|------|
 | **日** | 日勤 | 8:00〜17:00 (8h) | 標準勤務 |
@@ -1263,10 +1235,19 @@ with tab2:
 **注意:** 夜勤専従スタッフは「早・遅」を選択しないでください（自動で除外されます）
 """)
 
-    st.caption("各日に希望シフトを選択してください（空欄=希望なし）")
+    # --- 日付ヘッダー準備 ---
+    wdj = ["月", "火", "水", "木", "金", "土", "日"]
+    fwd = date(year, month, 1).weekday()
+    header_map = {}
+    for d in range(1, num_days + 1):
+        wd = wdj[(fwd + d - 1) % 7]
+        is_hol = d in holidays_auto
+        is_we = d in weekends_auto
+        suffix = "祝" if is_hol else ("★" if is_we else "")
+        header_map[str(d)] = f"{d}({wd}{suffix})"
 
-    staff_names = [n for n in edited_staff["名前"].dropna().tolist() if str(n).strip()]
-
+    # --- スタッフ名の同期（staff_df → requests_df） ---
+    staff_names = [n for n in st.session_state.staff_df["名前"].dropna().tolist() if str(n).strip()]
     if st.session_state.requests_df is None or set(st.session_state.requests_df["名前"].tolist()) != set(staff_names):
         if st.session_state.requests_df is not None:
             old = st.session_state.requests_df.set_index("名前")
@@ -1289,30 +1270,86 @@ with tab2:
                 rows.append(row)
             st.session_state.requests_df = pd.DataFrame(rows)
 
-    wdj = ["月", "火", "水", "木", "金", "土", "日"]
-    fwd = date(year, month, 1).weekday()
-    header_map = {}
-    for d in range(1, num_days + 1):
-        wd = wdj[(fwd + d - 1) % 7]
-        is_hol = d in holidays_auto
-        is_we = d in weekends_auto
-        suffix = "祝" if is_hol else ("★" if is_we else "")
-        header_map[str(d)] = f"{d}({wd}{suffix})"
+    # --- 統合DataFrame構築 ---
+    _staff_cols = ["Tier", "夜勤専従", "時短", "週勤務", "前月末",
+                   "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可"]
+    _day_cols = [str(d) for d in range(1, num_days + 1)]
 
-    col_config = {"名前": st.column_config.TextColumn("名前", disabled=True, width="medium")}
-    shift_options = ["", "日", "夜", "準", "早", "遅", "長", "短", "休", "研", "夜不", "休暇", "明休"]
-    for d in range(1, num_days + 1):
-        col_config[str(d)] = st.column_config.SelectboxColumn(
-            header_map[str(d)], options=shift_options, width="small")
+    # staff_df と requests_df を名前で結合
+    _sdf = st.session_state.staff_df.copy()
+    _rdf = st.session_state.requests_df.copy()
+    # 名前の順序はstaff_dfを優先
+    combined_df = _sdf.set_index("名前").reindex(staff_names)
+    _rdf_indexed = _rdf.set_index("名前").reindex(staff_names)
+    for col in _day_cols:
+        if col in _rdf_indexed.columns:
+            combined_df[col] = _rdf_indexed[col].values
+        else:
+            combined_df[col] = ""
+    combined_df = combined_df.reset_index()
 
-    edited_reqs = st.data_editor(
-        st.session_state.requests_df,
+    # --- 表示モードに応じたカラム選択 ---
+    if view_mode == "👤 スタッフ情報":
+        show_cols = ["名前"] + _staff_cols
+    elif view_mode == "📝 勤務希望":
+        show_cols = ["名前"] + _day_cols
+    else:
+        show_cols = ["名前"] + _staff_cols + _day_cols
+
+    # --- column_config 構築 ---
+    col_config = {}
+    col_config["名前"] = st.column_config.TextColumn("名前", width="medium")
+    # スタッフ情報カラム
+    if view_mode != "📝 勤務希望":
+        col_config["Tier"] = st.column_config.SelectboxColumn("Tier", options=["A", "AB", "B", "C"], width="small")
+        col_config["夜勤専従"] = st.column_config.CheckboxColumn("夜勤専従", width="small")
+        col_config["時短"] = st.column_config.CheckboxColumn("時短", width="small")
+        col_config["週勤務"] = st.column_config.NumberColumn("週勤務", min_value=1, max_value=7, step=1, width="small")
+        col_config["前月末"] = st.column_config.SelectboxColumn("前月末", options=["", "夜", "明"], width="small")
+        col_config["夜勤Min"] = st.column_config.NumberColumn("夜勤Min", min_value=0, max_value=15, step=1, width="small")
+        col_config["夜勤Max"] = st.column_config.NumberColumn("夜勤Max", min_value=0, max_value=15, step=1, width="small")
+        col_config["連勤Max"] = st.column_config.NumberColumn("連勤Max", min_value=1, max_value=10, step=1, width="small")
+        col_config["勤務曜日"] = st.column_config.TextColumn("勤務曜日", width="small", help="例: 月火木")
+        col_config["祝日不可"] = st.column_config.CheckboxColumn("祝日不可", width="small")
+    # 勤務希望カラム
+    if view_mode != "👤 スタッフ情報":
+        shift_options = ["", "日", "夜", "準", "早", "遅", "長", "短", "休", "研", "夜不", "休暇", "明休"]
+        for d in range(1, num_days + 1):
+            col_config[str(d)] = st.column_config.SelectboxColumn(
+                header_map[str(d)], options=shift_options, width="small")
+
+    # --- data_editor（統合） ---
+    edited_combined = st.data_editor(
+        combined_df[show_cols],
+        num_rows="dynamic" if view_mode != "📝 勤務希望" else "fixed",
         column_config=col_config,
         use_container_width=True,
-        key="reqs_editor",
+        key="combined_editor",
         hide_index=True,
     )
-    st.session_state.requests_df = edited_reqs
+
+    # --- 編集結果を元のDFに書き戻す ---
+    # スタッフ情報
+    _staff_out_cols = [c for c in (["名前"] + _staff_cols) if c in edited_combined.columns]
+    edited_staff = edited_combined[_staff_out_cols].copy()
+    # 勤務希望モードで名前しか表示していない場合は元のstaff_dfを保持
+    if view_mode == "📝 勤務希望":
+        # staff_dfの名前だけ更新し、属性はそのまま
+        edited_staff = st.session_state.staff_df.copy()
+    st.session_state.staff_df = edited_staff
+
+    # 勤務希望
+    _req_out_cols = [c for c in (["名前"] + _day_cols) if c in edited_combined.columns]
+    if len(_req_out_cols) > 1:  # 名前+日付列がある
+        edited_reqs = edited_combined[_req_out_cols].copy()
+        st.session_state.requests_df = edited_reqs
+    else:
+        edited_reqs = st.session_state.requests_df
+
+    if holidays_auto:
+        hol_names = {d.day: name for d, name in jpholiday.month_holidays(year, month)}
+        hol_str = "、".join(f"{d}日({hol_names.get(d, '祝')})" for d in sorted(holidays_auto))
+        st.info(f"🗓 {year}年{month}月の祝日: {hol_str}")
 
 # ============================================================
 # Tab 3: 生成
