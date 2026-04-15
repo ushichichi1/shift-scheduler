@@ -664,38 +664,92 @@ def _generate_template_excel(year, month):
         ws_s.cell(row=r, column=3, value=desc).border = bdr
         ws_s.cell(row=r, column=3).font = Font(color="888888", size=9)
 
-    # --- Sheet 2: スタッフ一覧 ---
-    ws_st = wb.create_sheet("スタッフ一覧")
-    headers = ["名前", "Tier", "夜勤専従", "時短", "週勤務", "前月末",
-               "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可"]
-    for c, txt in enumerate(headers, 1):
-        cell = ws_st.cell(row=1, column=c, value=txt)
-        cell.fill = hdr_fill; cell.font = hdr_font; cell.border = bdr
+    # --- Sheet 2: スタッフ・勤務希望（統合シート） ---
+    ws_c = wb.create_sheet("スタッフ・勤務希望")
+    ws_c.cell(row=1, column=1, value=f"スタッフ・勤務希望 — {year}年{month}月").font = Font(bold=True, size=14)
+    ws_c.cell(row=2, column=1, value="左側: スタッフ情報 ／ 右側: 勤務希望（日/夜/準/早/遅/長/短/休/研/夜不/休暇/明休）").font = Font(color="888888", size=9)
+
+    # --- ヘッダー構築 ---
+    staff_headers = ["名前", "Tier", "夜勤専従", "時短", "週勤務", "前月末",
+                     "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可"]
+    n_staff_cols = len(staff_headers)
+
+    weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
+    first_wd = date(year, month, 1).weekday()
+    holidays = {d.day for d, _ in jpholiday.month_holidays(year, month)}
+
+    # スタッフ情報ヘッダー (row 4)
+    staff_fill = PatternFill("solid", fgColor="4472C4")
+    for c, txt in enumerate(staff_headers, 1):
+        cell = ws_c.cell(row=4, column=c, value=txt)
+        cell.fill = staff_fill; cell.font = hdr_font; cell.border = bdr
         cell.alignment = Alignment(horizontal="center")
-    ws_st.column_dimensions["A"].width = 14
-    for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]:
-        ws_st.column_dimensions[col_letter].width = 10
-    # サンプル行
+    # グループラベル (row 3)
+    ws_c.merge_cells(start_row=3, start_column=1, end_row=3, end_column=n_staff_cols)
+    grp1 = ws_c.cell(row=3, column=1, value="👤 スタッフ情報")
+    grp1.font = Font(bold=True, size=11, color="4472C4")
+    grp1.alignment = Alignment(horizontal="center")
+
+    # 勤務希望ヘッダー (row 3-4)
+    day_start_col = n_staff_cols + 1
+    ws_c.merge_cells(start_row=3, start_column=day_start_col,
+                     end_row=3, end_column=day_start_col + num_days - 1)
+    grp2 = ws_c.cell(row=3, column=day_start_col, value="📝 勤務希望")
+    grp2.font = Font(bold=True, size=11, color="C00000")
+    grp2.alignment = Alignment(horizontal="center")
+
+    for d in range(1, num_days + 1):
+        col = day_start_col + d - 1
+        wd_name = weekdays_jp[(first_wd + d - 1) % 7]
+        # 曜日サブラベル (row 3 — 統合セルの下に入れられないので row 4 の上に小さく)
+        cell = ws_c.cell(row=4, column=col, value=f"{d}({wd_name})")
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = bdr
+        wd_idx = (first_wd + d - 1) % 7
+        if d in holidays:
+            cell.fill = PatternFill("solid", fgColor="F4CCCC")
+            cell.font = Font(bold=True, color="CC0000", size=9)
+        elif wd_idx >= 5:
+            cell.fill = PatternFill("solid", fgColor="D9E2F3")
+            cell.font = Font(bold=True, color="4472C4", size=9)
+        else:
+            cell.fill = PatternFill("solid", fgColor="C00000")
+            cell.font = Font(bold=True, color="FFFFFF", size=9)
+
+    # --- 列幅 ---
+    ws_c.column_dimensions["A"].width = 14
+    for i in range(1, n_staff_cols):
+        ws_c.column_dimensions[get_column_letter(i + 1)].width = 10
+    for d in range(1, num_days + 1):
+        ws_c.column_dimensions[get_column_letter(day_start_col + d - 1)].width = 7
+
+    # --- サンプルデータ行 ---
     samples = [
         ["山田太郎", "A", "", "", "", "", "", "", "", "", ""],
         ["佐藤花子", "AB", "", "", "", "", "", "", "", "", ""],
         ["鈴木一郎", "C", "", "", "3", "", "", "", "", "月水金", ""],
     ]
     for i, row_data in enumerate(samples):
+        r = 5 + i
         for c, val in enumerate(row_data, 1):
-            cell = ws_st.cell(row=2 + i, column=c, value=val)
+            cell = ws_c.cell(row=r, column=c, value=val)
             cell.border = bdr
+        # 日付列も空セル+罫線
+        for d in range(1, num_days + 1):
+            ws_c.cell(row=r, column=day_start_col + d - 1).border = bdr
+
     # 空行追加（20行分）
     for i in range(len(samples), 20):
-        for c in range(1, len(headers) + 1):
-            ws_st.cell(row=2 + i, column=c).border = bdr
+        r = 5 + i
+        for c in range(1, n_staff_cols + 1):
+            ws_c.cell(row=r, column=c).border = bdr
+        for d in range(1, num_days + 1):
+            ws_c.cell(row=r, column=day_start_col + d - 1).border = bdr
 
-    # --- Tier定義・カラム説明（スタッフ一覧シート右側） ---
-    ref_col = len(headers) + 2  # 右に1列あけて説明
-    ws_st.column_dimensions[get_column_letter(ref_col)].width = 14
-    ws_st.column_dimensions[get_column_letter(ref_col + 1)].width = 40
-    ref_title = ws_st.cell(row=1, column=ref_col, value="Tier定義")
-    ref_title.font = Font(bold=True, size=11, color="4472C4")
+    # --- 凡例エリア（シートの下部） ---
+    legend_start_row = 27
+    # Tier定義
+    ws_c.cell(row=legend_start_row, column=1, value="📖 Tier定義").font = Font(bold=True, size=11, color="4472C4")
     tier_defs = [
         ("A", "ベテラン・リーダー格（夜勤リーダー）"),
         ("AB", "中堅・リーダー代行可"),
@@ -703,10 +757,11 @@ def _generate_template_excel(year, month):
         ("C", "新人・経験浅い（A/AB/Bとペアに）"),
     ]
     for i, (tier, desc) in enumerate(tier_defs):
-        ws_st.cell(row=2 + i, column=ref_col, value=tier).font = Font(bold=True)
-        ws_st.cell(row=2 + i, column=ref_col + 1, value=desc).font = Font(color="555555", size=9)
-    col_title = ws_st.cell(row=7, column=ref_col, value="カラム説明")
-    col_title.font = Font(bold=True, size=11, color="4472C4")
+        ws_c.cell(row=legend_start_row + 1 + i, column=1, value=tier).font = Font(bold=True)
+        ws_c.cell(row=legend_start_row + 1 + i, column=2, value=desc).font = Font(color="555555", size=9)
+
+    # カラム説明
+    ws_c.cell(row=legend_start_row + 6, column=1, value="📖 カラム説明").font = Font(bold=True, size=11, color="4472C4")
     col_defs = [
         ("夜勤専従", "ONで夜勤/明け/休のみのパターン"),
         ("時短", "ONで時短(ST)/早出/遅出/休のみ"),
@@ -718,69 +773,26 @@ def _generate_template_excel(year, month):
         ("祝日不可", "ONで祝日に勤務を入れない"),
     ]
     for i, (col_name, desc) in enumerate(col_defs):
-        ws_st.cell(row=8 + i, column=ref_col, value=col_name).font = Font(bold=True, size=9)
-        ws_st.cell(row=8 + i, column=ref_col + 1, value=desc).font = Font(color="555555", size=9)
+        ws_c.cell(row=legend_start_row + 7 + i, column=1, value=col_name).font = Font(bold=True, size=9)
+        ws_c.cell(row=legend_start_row + 7 + i, column=2, value=desc).font = Font(color="555555", size=9)
 
-    # --- Sheet 3: 勤務希望 ---
-    ws_r = wb.create_sheet("勤務希望")
-    ws_r.cell(row=1, column=1, value="勤務希望入力").font = Font(bold=True, size=14)
-    ws_r.cell(row=2, column=1, value="各日に希望シフトの記号を入力（空欄=希望なし）").font = Font(color="888888", size=9)
-
-    weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
-    first_wd = date(year, month, 1).weekday()
-    holidays = {d.day for d, _ in jpholiday.month_holidays(year, month)}
-
-    # ヘッダー行 (row 4)
-    ws_r.column_dimensions["A"].width = 14
-    cell = ws_r.cell(row=4, column=1, value="名前")
-    cell.fill = hdr_fill; cell.font = hdr_font; cell.border = bdr
-    for d in range(1, num_days + 1):
-        wd_name = weekdays_jp[(first_wd + d - 1) % 7]
-        cell = ws_r.cell(row=3, column=1 + d, value=wd_name)
-        cell.alignment = Alignment(horizontal="center")
-        cell.font = Font(size=9, color="888888")
-        cell2 = ws_r.cell(row=4, column=1 + d, value=d)
-        cell2.alignment = Alignment(horizontal="center")
-        cell2.border = bdr
-        # 土日祝の色分け
-        wd_idx = (first_wd + d - 1) % 7
-        if d in holidays:
-            cell2.fill = PatternFill("solid", fgColor="F4CCCC")
-            cell2.font = Font(bold=True, color="CC0000")
-        elif wd_idx >= 5:
-            cell2.fill = PatternFill("solid", fgColor="D9E2F3")
-            cell2.font = Font(bold=True, color="4472C4")
-        else:
-            cell2.fill = hdr_fill
-            cell2.font = hdr_font
-    # 空行（20行分）
-    for i in range(20):
-        for c in range(1, num_days + 2):
-            ws_r.cell(row=5 + i, column=c).border = bdr
-
-    # --- シフト種別の凡例（勤務希望シート右側） ---
-    ref_col_r = num_days + 3
-    ws_r.column_dimensions[get_column_letter(ref_col_r)].width = 8
-    ws_r.column_dimensions[get_column_letter(ref_col_r + 1)].width = 30
-    ws_r.cell(row=3, column=ref_col_r, value="記号").font = Font(bold=True, size=10, color="4472C4")
-    ws_r.cell(row=3, column=ref_col_r + 1, value="説明").font = Font(bold=True, size=10, color="4472C4")
+    # シフト種別
+    shift_legend_col = 5
+    ws_c.cell(row=legend_start_row, column=shift_legend_col, value="📖 シフト種別").font = Font(bold=True, size=11, color="C00000")
     shift_legend = [
-        ("日", "日勤 (8:00〜17:00)"),
-        ("夜", "夜勤 (16:45〜翌9:00 / 16h)"),
-        ("準", "短夜勤 (17:00〜翌5:00 / 12h)"),
-        ("早", "早出 (7:00〜16:00)"),
-        ("遅", "遅出 (12:00〜21:00)"),
-        ("長", "長日勤 (8:45〜21:00 / 12h)"),
-        ("短", "時短 (8:45〜16:00 / 6.25h)"),
-        ("休", "公休"),
-        ("研", "研修"),
-        ("夜不", "この日は夜勤不可"),
-        ("休暇", "有給休暇"),
-        ("明休", "明け＋翌日も休み"),
+        ("日", "日勤 (8:00〜17:00)"), ("夜", "夜勤 (16:45〜翌9:00 / 16h)"),
+        ("準", "短夜勤 (17:00〜翌5:00 / 12h)"), ("早", "早出 (7:00〜16:00)"),
+        ("遅", "遅出 (12:00〜21:00)"), ("長", "長日勤 (8:45〜21:00 / 12h)"),
+        ("短", "時短 (8:45〜16:00 / 6.25h)"), ("休", "公休"),
+        ("研", "研修"), ("夜不", "この日は夜勤不可"),
+        ("休暇", "有給休暇"), ("明休", "明け＋翌日も休み"),
     ]
     for i, (sym, desc) in enumerate(shift_legend):
-        ws_r.cell(row=4 + i, column=ref_col_r, value=sym).font = Font(bold=True, size=10)
-        ws_r.cell(row=4 + i, column=ref_col_r + 1, value=desc).font = Font(color="555555", size=9)
+        ws_c.cell(row=legend_start_row + 1 + i, column=shift_legend_col, value=sym).font = Font(bold=True, size=10)
+        ws_c.cell(row=legend_start_row + 1 + i, column=shift_legend_col + 1, value=desc).font = Font(color="555555", size=9)
+
+    # ウィンドウ枠の固定（ヘッダー + 名前列）
+    ws_c.freeze_panes = "B5"
 
     buf = BytesIO()
     wb.save(buf)
@@ -807,28 +819,54 @@ def _parse_uploaded_excel(uploaded_file, year, month):
             rows.append(row_vals)
         gs_settings = _parse_settings(rows)
 
-    # スタッフ一覧
+    # --- 統合シート形式（新テンプレ） or 分離シート形式（旧テンプレ） ---
     staff_list = []
-    if "スタッフ一覧" in wb.sheetnames:
-        ws = wb["スタッフ一覧"]
-        staff_rows = []
-        for r in range(2, ws.max_row + 1):
-            row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, 13)]
-            if str(row_vals[0]).strip():
-                staff_rows.append(row_vals)
-        staff_list = _parse_staff_list(staff_rows)
-
-    # 勤務希望
     reqs = {}
-    if "勤務希望" in wb.sheetnames:
-        ws = wb["勤務希望"]
-        staff_names = [s.name for s in staff_list]
+    n_staff_cols = 11  # 名前〜祝日不可
+
+    if "スタッフ・勤務希望" in wb.sheetnames:
+        # 新フォーマット（統合シート）
+        ws = wb["スタッフ・勤務希望"]
+        staff_rows = []
         req_rows = []
-        for r in range(5, ws.max_row + 1):
-            row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, num_days + 2)]
-            if str(row_vals[0]).strip():
-                req_rows.append(row_vals)
-        reqs = _parse_requests(req_rows, staff_names, num_days)
+        for r in range(5, ws.max_row + 1):  # row 5 からデータ
+            name_val = ws.cell(row=r, column=1).value
+            if not name_val or not str(name_val).strip():
+                continue
+            # スタッフ情報（列 1〜11）
+            s_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, n_staff_cols + 2)]
+            staff_rows.append(s_vals)
+            # 勤務希望（列 12〜）
+            day_start = n_staff_cols + 1
+            r_vals = [str(name_val).strip()]
+            for d in range(1, num_days + 1):
+                v = ws.cell(row=r, column=day_start + d - 1).value or ""
+                r_vals.append(v)
+            req_rows.append(r_vals)
+        if staff_rows:
+            staff_list = _parse_staff_list(staff_rows)
+        staff_names = [s.name for s in staff_list]
+        if req_rows:
+            reqs = _parse_requests(req_rows, staff_names, num_days)
+    else:
+        # 旧フォーマット（分離シート）
+        if "スタッフ一覧" in wb.sheetnames:
+            ws = wb["スタッフ一覧"]
+            staff_rows = []
+            for r in range(2, ws.max_row + 1):
+                row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, 13)]
+                if str(row_vals[0]).strip():
+                    staff_rows.append(row_vals)
+            staff_list = _parse_staff_list(staff_rows)
+        if "勤務希望" in wb.sheetnames:
+            ws = wb["勤務希望"]
+            staff_names = [s.name for s in staff_list]
+            req_rows = []
+            for r in range(5, ws.max_row + 1):
+                row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, num_days + 2)]
+                if str(row_vals[0]).strip():
+                    req_rows.append(row_vals)
+            reqs = _parse_requests(req_rows, staff_names, num_days)
 
     return staff_list, reqs, gs_settings
 
