@@ -843,9 +843,12 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
             for t in [R, E, L, ST, LD]:
                 _excluded.add((s, t))
         if short_time_map.get(s):
-            # 時短: D/N/SN/LD は不要
+            # 時短: D/N/SN/LD は不要 → STのみ使用
             for t in [D, N, SN, LD]:
                 _excluded.add((s, t))
+        else:
+            # 時短フラグなし → STは使わない（通常日勤Dのみ）
+            _excluded.add((s, ST))
 
     # 有効な(s,d,t)のみ変数を生成
     _valid_keys = [(s, d, t) for s in names for d in days for t in SHIFTS
