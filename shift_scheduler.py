@@ -305,21 +305,29 @@ def _parse_staff_list(rows):
         if tier not in VALID_TIERS:
             print(f"⚠ '{name}' Tier '{tier}' 不正 → スキップ")
             continue
-        ded = str(row[2]).strip() in ("○", "◯") if len(row) > 2 else False
-        weekly_str = str(row[3]).strip() if len(row) > 3 else ""
+        ded = str(row[2]).strip() in ("○", "◯", "TRUE", "True", "1") if len(row) > 2 else False
+        # 時短フラグ（新カラム: index 3）— 旧フォーマット(10列)では週勤務がindex3
+        # 新フォーマット(11列)検出: len>=11 なら時短あり
+        if len(row) >= 11:
+            short_t = str(row[3]).strip() in ("○", "◯", "TRUE", "True", "1") if len(row) > 3 else False
+            col_offset = 4  # 時短の次から
+        else:
+            short_t = False
+            col_offset = 3  # 旧フォーマット: 時短列なし
+        weekly_str = str(row[col_offset]).strip() if len(row) > col_offset else ""
         weekly = int(weekly_str) if weekly_str.isdigit() else None
-        prev = str(row[4]).strip() if len(row) > 4 else ""
+        prev = str(row[col_offset+1]).strip() if len(row) > col_offset+1 else ""
         if prev not in ("夜", "明", ""):
             print(f"⚠ '{name}' 前月末 '{prev}' 不正（夜/明/空欄）→ 無視")
             prev = ""
-        n_min_str = str(row[5]).strip() if len(row) > 5 else ""
-        n_max_str = str(row[6]).strip() if len(row) > 6 else ""
-        c_max_str = str(row[7]).strip() if len(row) > 7 else ""
+        n_min_str = str(row[col_offset+2]).strip() if len(row) > col_offset+2 else ""
+        n_max_str = str(row[col_offset+3]).strip() if len(row) > col_offset+3 else ""
+        c_max_str = str(row[col_offset+4]).strip() if len(row) > col_offset+4 else ""
         n_min = int(n_min_str) if n_min_str.isdigit() else None
         n_max = int(n_max_str) if n_max_str.isdigit() else None
         c_max = int(c_max_str) if c_max_str.isdigit() else None
         # 勤務曜日: "月火木" → {0, 1, 3}
-        wd_str = str(row[8]).strip() if len(row) > 8 else ""
+        wd_str = str(row[col_offset+5]).strip() if len(row) > col_offset+5 else ""
         wd_map = {"月":0, "火":1, "水":2, "木":3, "金":4, "土":5, "日":6}
         work_days = None
         if wd_str:
@@ -330,10 +338,10 @@ def _parse_staff_list(rows):
             if not work_days:
                 work_days = None
         # 祝日不可
-        no_hol_str = str(row[9]).strip() if len(row) > 9 else ""
-        no_hol = no_hol_str in ("○", "◯")
+        no_hol_str = str(row[col_offset+6]).strip() if len(row) > col_offset+6 else ""
+        no_hol = no_hol_str in ("○", "◯", "TRUE", "True", "1")
         staff.append(Staff(name, tier, ded, weekly, prev, n_min, n_max, c_max,
-                           work_days, no_hol))
+                           work_days, no_hol, short_t))
     if not staff:
         print("✗ スタッフが0人です")
         sys.exit(1)

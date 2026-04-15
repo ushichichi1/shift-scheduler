@@ -600,6 +600,7 @@ def _generate_template_excel(year, month):
     """入力用Excelテンプレートを生成"""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
 
     wb = Workbook()
     num_days = calendar.monthrange(year, month)[1]
@@ -631,20 +632,20 @@ def _generate_template_excel(year, month):
 
     # --- Sheet 2: スタッフ一覧 ---
     ws_st = wb.create_sheet("スタッフ一覧")
-    headers = ["名前", "Tier", "夜勤専従", "週勤務", "前月末",
+    headers = ["名前", "Tier", "夜勤専従", "時短", "週勤務", "前月末",
                "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可"]
     for c, txt in enumerate(headers, 1):
         cell = ws_st.cell(row=1, column=c, value=txt)
         cell.fill = hdr_fill; cell.font = hdr_font; cell.border = bdr
         cell.alignment = Alignment(horizontal="center")
     ws_st.column_dimensions["A"].width = 14
-    for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J"]:
+    for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]:
         ws_st.column_dimensions[col_letter].width = 10
     # サンプル行
     samples = [
-        ["山田太郎", "A", "", "", "", "", "", "", "", ""],
-        ["佐藤花子", "AB", "", "", "", "", "", "", "", ""],
-        ["鈴木一郎", "C", "", "3", "", "", "", "", "月水金", ""],
+        ["山田太郎", "A", "", "", "", "", "", "", "", "", ""],
+        ["佐藤花子", "AB", "", "", "", "", "", "", "", "", ""],
+        ["鈴木一郎", "C", "", "", "3", "", "", "", "", "月水金", ""],
     ]
     for i, row_data in enumerate(samples):
         for c, val in enumerate(row_data, 1):
@@ -652,13 +653,44 @@ def _generate_template_excel(year, month):
             cell.border = bdr
     # 空行追加（20行分）
     for i in range(len(samples), 20):
-        for c in range(1, 11):
+        for c in range(1, len(headers) + 1):
             ws_st.cell(row=2 + i, column=c).border = bdr
+
+    # --- Tier定義・カラム説明（スタッフ一覧シート右側） ---
+    ref_col = len(headers) + 2  # 右に1列あけて説明
+    ws_st.column_dimensions[get_column_letter(ref_col)].width = 14
+    ws_st.column_dimensions[get_column_letter(ref_col + 1)].width = 40
+    ref_title = ws_st.cell(row=1, column=ref_col, value="Tier定義")
+    ref_title.font = Font(bold=True, size=11, color="4472C4")
+    tier_defs = [
+        ("A", "ベテラン・リーダー格（夜勤リーダー）"),
+        ("AB", "中堅・リーダー代行可"),
+        ("B", "一人立ち済み・通常メンバー"),
+        ("C", "新人・経験浅い（A/AB/Bとペアに）"),
+    ]
+    for i, (tier, desc) in enumerate(tier_defs):
+        ws_st.cell(row=2 + i, column=ref_col, value=tier).font = Font(bold=True)
+        ws_st.cell(row=2 + i, column=ref_col + 1, value=desc).font = Font(color="555555", size=9)
+    col_title = ws_st.cell(row=7, column=ref_col, value="カラム説明")
+    col_title.font = Font(bold=True, size=11, color="4472C4")
+    col_defs = [
+        ("夜勤専従", "ONで夜勤/明け/休のみのパターン"),
+        ("時短", "ONで時短(ST)/早出/遅出/休のみ"),
+        ("週勤務", "パートの週勤務日数（空欄=フルタイム）"),
+        ("前月末", "前月末の勤務状態（夜/明）"),
+        ("夜勤Min/Max", "個別の夜勤回数制限（空欄=全体設定）"),
+        ("連勤Max", "最大連続勤務日数（空欄=全体設定）"),
+        ("勤務曜日", "特定曜日のみ勤務（例:月水金）"),
+        ("祝日不可", "ONで祝日に勤務を入れない"),
+    ]
+    for i, (col_name, desc) in enumerate(col_defs):
+        ws_st.cell(row=8 + i, column=ref_col, value=col_name).font = Font(bold=True, size=9)
+        ws_st.cell(row=8 + i, column=ref_col + 1, value=desc).font = Font(color="555555", size=9)
 
     # --- Sheet 3: 勤務希望 ---
     ws_r = wb.create_sheet("勤務希望")
     ws_r.cell(row=1, column=1, value="勤務希望入力").font = Font(bold=True, size=14)
-    ws_r.cell(row=2, column=1, value="日/夜/休/研/夜不/休暇/明休 を入力").font = Font(color="888888", size=9)
+    ws_r.cell(row=2, column=1, value="各日に希望シフトの記号を入力（空欄=希望なし）").font = Font(color="888888", size=9)
 
     weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
     first_wd = date(year, month, 1).weekday()
@@ -692,6 +724,30 @@ def _generate_template_excel(year, month):
         for c in range(1, num_days + 2):
             ws_r.cell(row=5 + i, column=c).border = bdr
 
+    # --- シフト種別の凡例（勤務希望シート右側） ---
+    ref_col_r = num_days + 3
+    ws_r.column_dimensions[get_column_letter(ref_col_r)].width = 8
+    ws_r.column_dimensions[get_column_letter(ref_col_r + 1)].width = 30
+    ws_r.cell(row=3, column=ref_col_r, value="記号").font = Font(bold=True, size=10, color="4472C4")
+    ws_r.cell(row=3, column=ref_col_r + 1, value="説明").font = Font(bold=True, size=10, color="4472C4")
+    shift_legend = [
+        ("日", "日勤 (8:00〜17:00)"),
+        ("夜", "夜勤 (16:45〜翌9:00 / 16h)"),
+        ("準", "短夜勤 (17:00〜翌5:00 / 12h)"),
+        ("早", "早出 (7:00〜16:00)"),
+        ("遅", "遅出 (12:00〜21:00)"),
+        ("長", "長日勤 (8:45〜21:00 / 12h)"),
+        ("短", "時短 (8:45〜16:00 / 6.25h)"),
+        ("休", "公休"),
+        ("研", "研修"),
+        ("夜不", "この日は夜勤不可"),
+        ("休暇", "有給休暇"),
+        ("明休", "明け＋翌日も休み"),
+    ]
+    for i, (sym, desc) in enumerate(shift_legend):
+        ws_r.cell(row=4 + i, column=ref_col_r, value=sym).font = Font(bold=True, size=10)
+        ws_r.cell(row=4 + i, column=ref_col_r + 1, value=desc).font = Font(color="555555", size=9)
+
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -723,7 +779,7 @@ def _parse_uploaded_excel(uploaded_file, year, month):
         ws = wb["スタッフ一覧"]
         staff_rows = []
         for r in range(2, ws.max_row + 1):
-            row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, 11)]
+            row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, 13)]
             if str(row_vals[0]).strip():
                 staff_rows.append(row_vals)
         staff_list = _parse_staff_list(staff_rows)
@@ -914,18 +970,75 @@ with tab0:
     with col_left:
         st.markdown("### 📥 テンプレートをダウンロード")
         st.markdown("""
-        1. 下のボタンでExcelテンプレートをダウンロード
+        1. テンプレートをダウンロード（Excel or Googleスプレッドシート）
         2. **設定・スタッフ一覧・勤務希望** を記入
-        3. 右の「Excelアップロード」で読み込み
+        3. 右の「データ読み込み」で読み込み
         """)
         template_bytes = _generate_template_excel(year, month)
         st.download_button(
-            label=f"📄 テンプレートDL（{year}年{month}月）",
+            label=f"📄 Excelテンプレート（{year}年{month}月）",
             data=template_bytes,
             file_name=f"勤務表テンプレート_{year}_{month:02d}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+        # --- Googleスプレッドシートへテンプレート出力 ---
+        if st.button("📊 Googleスプレッドシートにテンプレート作成", use_container_width=True, key="btn_gsheet_tmpl"):
+            try:
+                from shift_scheduler import _get_gsheet_client
+                gc = _get_gsheet_client()
+                title = f"勤務表テンプレート_{year}_{month:02d}"
+                sh = gc.create(title)
+                # --- 設定シート ---
+                ws_s = sh.sheet1
+                ws_s.update_title("設定")
+                s_rows = [["項目", "値", "説明"]]
+                for label, default, desc in SETTINGS_DEF:
+                    s_rows.append([label, default, desc])
+                ws_s.update(s_rows, "A1")
+                # --- スタッフ一覧シート ---
+                ws_st = sh.add_worksheet("スタッフ一覧", rows=30, cols=15)
+                st_rows = [["名前", "Tier", "夜勤専従", "時短", "週勤務", "前月末",
+                            "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可",
+                            "", "Tier定義", "説明"]]
+                st_rows.append(["山田太郎", "A", "", "", "", "", "", "", "", "", "",
+                                "", "A", "ベテラン・リーダー格"])
+                st_rows.append(["佐藤花子", "AB", "", "", "", "", "", "", "", "", "",
+                                "", "AB", "中堅・リーダー代行可"])
+                st_rows.append(["鈴木一郎", "C", "", "", "3", "", "", "", "", "月水金", "",
+                                "", "B", "一人立ち済み"])
+                st_rows.append(["", "", "", "", "", "", "", "", "", "", "",
+                                "", "C", "新人・経験浅い"])
+                ws_st.update(st_rows, "A1")
+                # --- 勤務希望シート ---
+                _num_days = calendar.monthrange(year, month)[1]
+                ws_r = sh.add_worksheet("勤務希望", rows=30, cols=_num_days + 40)
+                _wdj = ["月", "火", "水", "木", "金", "土", "日"]
+                _fwd = date(year, month, 1).weekday()
+                r_hdr = ["名前"] + [f"{d}({_wdj[(_fwd+d-1)%7]})" for d in range(1, _num_days+1)]
+                # 凡例列
+                _ref_col = _num_days + 2
+                r_hdr += [""] + ["記号", "説明"]
+                ws_r.update([r_hdr], "A1")
+                legend = [
+                    ["日", "日勤(8:00-17:00)"], ["夜", "夜勤(16:45-翌9:00)"],
+                    ["準", "短夜勤(17:00-翌5:00)"], ["早", "早出(7:00-16:00)"],
+                    ["遅", "遅出(12:00-21:00)"], ["長", "長日勤(8:45-21:00)"],
+                    ["短", "時短(8:45-16:00)"], ["休", "公休"],
+                    ["研", "研修"], ["夜不", "夜勤不可"], ["休暇", "有給休暇"],
+                    ["明休", "明け＋翌日休み"],
+                ]
+                import gspread.utils as _gu
+                _start = _gu.rowcol_to_a1(2, _num_days + 3)
+                ws_r.update([[s, d] for s, d in legend], _start)
+
+                url = sh.url
+                st.success(f"✅ Googleスプレッドシートを作成しました")
+                st.markdown(f"[📊 スプレッドシートを開く]({url})")
+            except ImportError:
+                st.error("gspread/google-authが必要です: pip install gspread google-auth")
+            except Exception as e:
+                st.error(f"作成エラー: {e}\n\n認証設定を確認してください（.streamlit/secrets.toml または credentials.json）")
 
     # --- 右カラム: データ読み込み ---
     with col_right:
@@ -1009,7 +1122,50 @@ with tab0:
 # ============================================================
 with tab1:
     st.subheader("スタッフ一覧")
-    st.caption("行を追加・編集できます。Tierは A/AB/B/C から選択。")
+
+    # --- スタッフ一括追加 ---
+    col_add1, col_add2 = st.columns([1, 3])
+    with col_add1:
+        add_count = st.number_input("追加人数", min_value=1, max_value=50, value=5, step=1, key="add_staff_count")
+    with col_add2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button(f"➕ {add_count}人を一括追加", key="btn_add_staff"):
+            current = st.session_state.staff_df
+            existing_count = len(current.dropna(subset=["名前"]))
+            new_rows = []
+            for i in range(add_count):
+                new_rows.append({
+                    "名前": f"スタッフ{existing_count + i + 1}",
+                    "Tier": "C", "夜勤専従": False, "時短": False,
+                    "週勤務": None, "前月末": "", "夜勤Min": None,
+                    "夜勤Max": None, "連勤Max": None, "勤務曜日": "", "祝日不可": False,
+                })
+            st.session_state.staff_df = pd.concat(
+                [current, pd.DataFrame(new_rows)], ignore_index=True)
+            st.rerun()
+
+    # --- Tier定義パネル ---
+    with st.expander("📖 Tier（スキルランク）の定義", expanded=False):
+        st.markdown("""
+| Tier | 説明 | 夜勤の役割 |
+|------|------|-----------|
+| **A** | ベテラン・リーダー格 | 夜勤リーダー（必ずA/ABが1人以上） |
+| **AB** | 中堅・リーダー代行可 | Aが不在時にリーダー代行 |
+| **B** | 一人立ち済み | 通常メンバー（B+Cだけのペアは回避） |
+| **C** | 新人・経験浅い | 通常メンバー（必ずA/AB/Bとペアに） |
+
+**各カラムの説明:**
+- **夜勤専従**: ONにすると夜勤・明け・休のみの勤務パターンになります
+- **時短**: ONにすると時短(ST)・早出(E)・遅出(L)・休のみ。夜勤/長日勤は入りません
+- **週勤務**: パートタイムの場合に週あたりの勤務日数を指定（空欄=フルタイム）
+- **前月末**: 前月最終日の勤務（夜=夜勤中/明=夜勤明け）→翌月初の制約に反映
+- **夜勤Min/Max**: 個別の夜勤回数制限（空欄=全体設定に従う）
+- **連勤Max**: 最大連続勤務日数（空欄=全体設定に従う）
+- **勤務曜日**: パート等で特定曜日のみ勤務する場合（例: 月水金）
+- **祝日不可**: ONにすると祝日に勤務を入れません
+""")
+
+    st.caption("行を追加・編集できます。名前をダブルクリックで編集。")
 
     edited_staff = st.data_editor(
         st.session_state.staff_df,
@@ -1042,7 +1198,29 @@ with tab1:
 # ============================================================
 with tab2:
     st.subheader(f"勤務希望 — {year}年{month}月（{num_days}日間）")
-    st.caption("日/夜/休/研/夜不/休暇/明休 を入力（空欄=希望なし）　※夜勤専従は早出・遅出を選択しないでください")
+
+    # --- シフト種別の定義パネル ---
+    with st.expander("📖 シフト種別の定義", expanded=False):
+        st.markdown("""
+| 記号 | 正式名 | 時間帯 | 備考 |
+|------|--------|--------|------|
+| **日** | 日勤 | 8:00〜17:00 (8h) | 標準勤務 |
+| **夜** | 夜勤 | 16:45〜翌9:00 (16h) | 翌日は自動で「明け」 |
+| **準** | 短夜勤 | 17:00〜翌5:00 (12h) | 夜勤の短縮版 |
+| **早** | 早出 | 7:00〜16:00 (8h) | 日勤の早番 |
+| **遅** | 遅出 | 12:00〜21:00 (8h) | 日勤の遅番 |
+| **長** | 長日勤 | 8:45〜21:00 (12h) | 日勤の延長版 |
+| **短** | 時短 | 8:45〜16:00 (6.25h) | 育児・介護向け |
+| **休** | 公休 | — | 通常の休日 |
+| **研** | 研修 | — | 研修日（勤務扱い） |
+| **夜不** | 夜勤不可 | — | この日は夜勤に入れないで |
+| **休暇** | 有給休暇 | — | 休暇申請済み |
+| **明休** | 明け＋休 | — | 明けの翌日も休みに |
+
+**注意:** 夜勤専従スタッフは「早・遅」を選択しないでください（自動で除外されます）
+""")
+
+    st.caption("各日に希望シフトを選択してください（空欄=希望なし）")
 
     staff_names = [n for n in edited_staff["名前"].dropna().tolist() if str(n).strip()]
 
