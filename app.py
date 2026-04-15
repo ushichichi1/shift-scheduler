@@ -1753,6 +1753,34 @@ with tab4:
 
         st.subheader(f"📊 {r_year}年{r_month}月 勤務表 — パターン {pat_idx + 1}")
 
+        # ── Excel出力ボタン（上部に目立つように配置） ──
+        _dl_top1, _dl_top2, _dl_top3 = st.columns([2, 2, 6])
+        if "excel_bytes" in st.session_state:
+            _dl_top1.download_button(
+                label="📥 Excel出力",
+                data=st.session_state.excel_bytes,
+                file_name=f"勤務表_{r_year}_{r_month:02d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+                key="dl_excel_top",
+            )
+        # 手動編集後の再出力ボタン
+        if _dl_top2.button("🔄 最新版をExcel化", use_container_width=True, key="regen_excel_top"):
+            from openpyxl import Workbook as _WB
+            _buf = BytesIO()
+            _wb = _WB()
+            _wb.remove(_wb.active)
+            for _res in results:
+                _pat = _res.get("pattern_num", 1)
+                _title = f"パターン{_pat}" if len(results) > 1 else "勤務表"
+                _write_one_sheet(_wb, _res, _title)
+            _wb.save(_buf)
+            _buf.seek(0)
+            st.session_state.excel_bytes = _buf.getvalue()
+            st.success("✅ 最新のスケジュールでExcelを再生成しました")
+            st.rerun()
+
         # 夜勤系合計（N + SN）
         night_counts = {s: sum(schedule[s].count(t) for t in NIGHT_SHIFTS) for s in names}
         nc_regular = [v for s, v in night_counts.items()
