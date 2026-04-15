@@ -596,7 +596,7 @@ def _generate_youshiki9_excel(schedule, names, tiers, r_dedicated, r_weekly,
 # ============================================================
 # Excelテンプレート生成
 # ============================================================
-def _generate_template_excel(year, month):
+def _generate_template_excel(year, month, num_staff=20):
     """入力用Excelテンプレートを生成"""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -608,7 +608,13 @@ def _generate_template_excel(year, month):
     bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
     hdr_fill = PatternFill("solid", fgColor="4472C4")
     hdr_font = Font(bold=True, color="FFFFFF", size=11)
-    sub_fill = PatternFill("solid", fgColor="D9E2F3")
+    # スタッフ情報エリア: 薄緑
+    staff_hdr_fill = PatternFill("solid", fgColor="548235")
+    staff_hdr_font = Font(bold=True, color="FFFFFF", size=10)
+    staff_cell_fill = PatternFill("solid", fgColor="E2EFDA")
+    # 勤務希望エリア: 青
+    req_hdr_font = Font(bold=True, color="FFFFFF", size=9)
+    req_cell_fill = PatternFill("solid", fgColor="D6E4F0")
 
     # --- Sheet 1: 設定 ---
     ws_s = wb.active
@@ -667,7 +673,7 @@ def _generate_template_excel(year, month):
     # --- Sheet 2: スタッフ・勤務希望（統合シート） ---
     ws_c = wb.create_sheet("スタッフ・勤務希望")
     ws_c.cell(row=1, column=1, value=f"スタッフ・勤務希望 — {year}年{month}月").font = Font(bold=True, size=14)
-    ws_c.cell(row=2, column=1, value="左側: スタッフ情報 ／ 右側: 勤務希望（日/夜/準/早/遅/長/短/休/研/夜不/休暇/明休）").font = Font(color="888888", size=9)
+    ws_c.cell(row=2, column=1, value="緑エリア: スタッフ情報 ／ 青エリア: 勤務希望（日/夜/準/早/遅/長/短/休/研/夜不/休暇/明休）").font = Font(color="888888", size=9)
 
     # --- ヘッダー構築 ---
     staff_headers = ["名前", "Tier", "夜勤専従", "時短", "週勤務", "前月末",
@@ -678,30 +684,30 @@ def _generate_template_excel(year, month):
     first_wd = date(year, month, 1).weekday()
     holidays = {d.day for d, _ in jpholiday.month_holidays(year, month)}
 
-    # スタッフ情報ヘッダー (row 4)
-    staff_fill = PatternFill("solid", fgColor="4472C4")
+    # スタッフ情報ヘッダー (row 4) — 緑系
     for c, txt in enumerate(staff_headers, 1):
         cell = ws_c.cell(row=4, column=c, value=txt)
-        cell.fill = staff_fill; cell.font = hdr_font; cell.border = bdr
+        cell.fill = staff_hdr_fill; cell.font = staff_hdr_font; cell.border = bdr
         cell.alignment = Alignment(horizontal="center")
     # グループラベル (row 3)
     ws_c.merge_cells(start_row=3, start_column=1, end_row=3, end_column=n_staff_cols)
     grp1 = ws_c.cell(row=3, column=1, value="👤 スタッフ情報")
-    grp1.font = Font(bold=True, size=11, color="4472C4")
+    grp1.font = Font(bold=True, size=11, color="548235")
     grp1.alignment = Alignment(horizontal="center")
+    grp1.fill = PatternFill("solid", fgColor="E2EFDA")
 
-    # 勤務希望ヘッダー (row 3-4)
+    # 勤務希望ヘッダー (row 3-4) — 青系
     day_start_col = n_staff_cols + 1
     ws_c.merge_cells(start_row=3, start_column=day_start_col,
                      end_row=3, end_column=day_start_col + num_days - 1)
     grp2 = ws_c.cell(row=3, column=day_start_col, value="📝 勤務希望")
-    grp2.font = Font(bold=True, size=11, color="C00000")
+    grp2.font = Font(bold=True, size=11, color="1F4E79")
     grp2.alignment = Alignment(horizontal="center")
+    grp2.fill = PatternFill("solid", fgColor="D6E4F0")
 
     for d in range(1, num_days + 1):
         col = day_start_col + d - 1
         wd_name = weekdays_jp[(first_wd + d - 1) % 7]
-        # 曜日サブラベル (row 3 — 統合セルの下に入れられないので row 4 の上に小さく)
         cell = ws_c.cell(row=4, column=col, value=f"{d}({wd_name})")
         cell.alignment = Alignment(horizontal="center")
         cell.border = bdr
@@ -710,11 +716,11 @@ def _generate_template_excel(year, month):
             cell.fill = PatternFill("solid", fgColor="F4CCCC")
             cell.font = Font(bold=True, color="CC0000", size=9)
         elif wd_idx >= 5:
-            cell.fill = PatternFill("solid", fgColor="D9E2F3")
-            cell.font = Font(bold=True, color="4472C4", size=9)
+            cell.fill = PatternFill("solid", fgColor="BDD7EE")
+            cell.font = Font(bold=True, color="1F4E79", size=9)
         else:
-            cell.fill = PatternFill("solid", fgColor="C00000")
-            cell.font = Font(bold=True, color="FFFFFF", size=9)
+            cell.fill = PatternFill("solid", fgColor="4472C4")
+            cell.font = req_hdr_font
 
     # --- 列幅 ---
     ws_c.column_dimensions["A"].width = 14
@@ -723,33 +729,34 @@ def _generate_template_excel(year, month):
     for d in range(1, num_days + 1):
         ws_c.column_dimensions[get_column_letter(day_start_col + d - 1)].width = 7
 
-    # --- サンプルデータ行 ---
+    # --- サンプルデータ行（3行） + 空行（num_staff - 3行） ---
     samples = [
         ["山田太郎", "A", "", "", "", "", "", "", "", "", ""],
         ["佐藤花子", "AB", "", "", "", "", "", "", "", "", ""],
         ["鈴木一郎", "C", "", "", "3", "", "", "", "", "月水金", ""],
     ]
-    for i, row_data in enumerate(samples):
+    total_rows = max(num_staff, len(samples))
+    for i in range(total_rows):
         r = 5 + i
+        if i < len(samples):
+            row_data = samples[i]
+        else:
+            row_data = [f"スタッフ{i + 1}"] + [""] * (n_staff_cols - 1)
+        # スタッフ情報セル（薄緑背景）
         for c, val in enumerate(row_data, 1):
-            cell = ws_c.cell(row=r, column=c, value=val)
+            cell = ws_c.cell(row=r, column=c, value=val if val != "" else None)
             cell.border = bdr
-        # 日付列も空セル+罫線
+            cell.fill = staff_cell_fill
+        # 勤務希望セル（薄青背景・空欄）
         for d in range(1, num_days + 1):
-            ws_c.cell(row=r, column=day_start_col + d - 1).border = bdr
+            cell = ws_c.cell(row=r, column=day_start_col + d - 1)
+            cell.border = bdr
+            cell.fill = req_cell_fill
 
-    # 空行追加（20行分）
-    for i in range(len(samples), 20):
-        r = 5 + i
-        for c in range(1, n_staff_cols + 1):
-            ws_c.cell(row=r, column=c).border = bdr
-        for d in range(1, num_days + 1):
-            ws_c.cell(row=r, column=day_start_col + d - 1).border = bdr
-
-    # --- 凡例エリア（シートの下部） ---
-    legend_start_row = 27
+    # --- 凡例エリア（データの下に余白を空けて配置） ---
+    legend_start_row = 5 + total_rows + 2
     # Tier定義
-    ws_c.cell(row=legend_start_row, column=1, value="📖 Tier定義").font = Font(bold=True, size=11, color="4472C4")
+    ws_c.cell(row=legend_start_row, column=1, value="📖 Tier定義").font = Font(bold=True, size=11, color="548235")
     tier_defs = [
         ("A", "ベテラン・リーダー格（夜勤リーダー）"),
         ("AB", "中堅・リーダー代行可"),
@@ -761,7 +768,7 @@ def _generate_template_excel(year, month):
         ws_c.cell(row=legend_start_row + 1 + i, column=2, value=desc).font = Font(color="555555", size=9)
 
     # カラム説明
-    ws_c.cell(row=legend_start_row + 6, column=1, value="📖 カラム説明").font = Font(bold=True, size=11, color="4472C4")
+    ws_c.cell(row=legend_start_row + 6, column=1, value="📖 カラム説明").font = Font(bold=True, size=11, color="548235")
     col_defs = [
         ("夜勤専従", "ONで夜勤/明け/休のみのパターン"),
         ("時短", "ONで時短(ST)/早出/遅出/休のみ"),
@@ -778,7 +785,7 @@ def _generate_template_excel(year, month):
 
     # シフト種別
     shift_legend_col = 5
-    ws_c.cell(row=legend_start_row, column=shift_legend_col, value="📖 シフト種別").font = Font(bold=True, size=11, color="C00000")
+    ws_c.cell(row=legend_start_row, column=shift_legend_col, value="📖 シフト種別").font = Font(bold=True, size=11, color="1F4E79")
     shift_legend = [
         ("日", "日勤 (8:00〜17:00)"), ("夜", "夜勤 (16:45〜翌9:00 / 16h)"),
         ("準", "短夜勤 (17:00〜翌5:00 / 12h)"), ("早", "早出 (7:00〜16:00)"),
@@ -1042,13 +1049,16 @@ with tab0:
     with col_left:
         st.markdown("### 📥 テンプレートをダウンロード")
         st.markdown("""
-        1. テンプレートをダウンロード（Excel or Googleスプレッドシート）
-        2. **設定・スタッフ一覧・勤務希望** を記入
+        1. スタッフ人数を入力してテンプレートをダウンロード
+        2. **スタッフ情報・勤務希望** を記入
         3. 右の「データ読み込み」で読み込み
         """)
-        template_bytes = _generate_template_excel(year, month)
+        tmpl_staff_count = st.number_input(
+            "テンプレートのスタッフ人数", min_value=1, max_value=100,
+            value=15, step=1, key="tmpl_staff_count")
+        template_bytes = _generate_template_excel(year, month, num_staff=tmpl_staff_count)
         st.download_button(
-            label=f"📄 Excelテンプレート（{year}年{month}月）",
+            label=f"📄 Excelテンプレート（{year}年{month}月・{tmpl_staff_count}人）",
             data=template_bytes,
             file_name=f"勤務表テンプレート_{year}_{month:02d}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1230,6 +1240,20 @@ with tab1:
         horizontal=True, index=2, key="view_mode",
     )
 
+    # --- スタッフ情報カラム選択（表示/非表示） ---
+    _all_staff_detail_cols = ["Tier", "夜勤専従", "時短", "週勤務", "前月末",
+                              "夜勤Min", "夜勤Max", "連勤Max", "勤務曜日", "祝日不可"]
+    if view_mode in ("👤 スタッフ情報", "👤+📝 すべて"):
+        with st.expander("⚙ 表示カラム選択", expanded=False):
+            _visible_staff_cols = st.multiselect(
+                "表示するスタッフ情報カラム",
+                _all_staff_detail_cols,
+                default=_all_staff_detail_cols,
+                key="staff_col_toggle",
+            )
+    else:
+        _visible_staff_cols = _all_staff_detail_cols
+
     # --- 定義パネル（表示モードに応じて出し分け） ---
     if view_mode in ("👤 スタッフ情報", "👤+📝 すべて"):
         with st.expander("📖 Tier（スキルランク）の定義", expanded=False):
@@ -1326,29 +1350,34 @@ with tab1:
             combined_df[col] = ""
     combined_df = combined_df.reset_index()
 
-    # --- 表示モードに応じたカラム選択 ---
+    # --- 表示モードに応じたカラム選択（トグル反映） ---
     if view_mode == "👤 スタッフ情報":
-        show_cols = ["名前"] + _staff_cols
+        show_cols = ["名前"] + _visible_staff_cols
     elif view_mode == "📝 勤務希望":
         show_cols = ["名前"] + _day_cols
     else:
-        show_cols = ["名前"] + _staff_cols + _day_cols
+        show_cols = ["名前"] + _visible_staff_cols + _day_cols
 
     # --- column_config 構築 ---
+    _col_config_defs = {
+        "Tier": st.column_config.SelectboxColumn("Tier", options=["A", "AB", "B", "C"], width="small"),
+        "夜勤専従": st.column_config.CheckboxColumn("夜勤専従", width="small"),
+        "時短": st.column_config.CheckboxColumn("時短", width="small"),
+        "週勤務": st.column_config.NumberColumn("週勤務", min_value=1, max_value=7, step=1, width="small"),
+        "前月末": st.column_config.SelectboxColumn("前月末", options=["", "夜", "明"], width="small"),
+        "夜勤Min": st.column_config.NumberColumn("夜勤Min", min_value=0, max_value=15, step=1, width="small"),
+        "夜勤Max": st.column_config.NumberColumn("夜勤Max", min_value=0, max_value=15, step=1, width="small"),
+        "連勤Max": st.column_config.NumberColumn("連勤Max", min_value=1, max_value=10, step=1, width="small"),
+        "勤務曜日": st.column_config.TextColumn("勤務曜日", width="small", help="例: 月火木"),
+        "祝日不可": st.column_config.CheckboxColumn("祝日不可", width="small"),
+    }
     col_config = {}
     col_config["名前"] = st.column_config.TextColumn("名前", width="medium")
-    # スタッフ情報カラム
+    # 選択されたスタッフ情報カラムのみ追加
     if view_mode != "📝 勤務希望":
-        col_config["Tier"] = st.column_config.SelectboxColumn("Tier", options=["A", "AB", "B", "C"], width="small")
-        col_config["夜勤専従"] = st.column_config.CheckboxColumn("夜勤専従", width="small")
-        col_config["時短"] = st.column_config.CheckboxColumn("時短", width="small")
-        col_config["週勤務"] = st.column_config.NumberColumn("週勤務", min_value=1, max_value=7, step=1, width="small")
-        col_config["前月末"] = st.column_config.SelectboxColumn("前月末", options=["", "夜", "明"], width="small")
-        col_config["夜勤Min"] = st.column_config.NumberColumn("夜勤Min", min_value=0, max_value=15, step=1, width="small")
-        col_config["夜勤Max"] = st.column_config.NumberColumn("夜勤Max", min_value=0, max_value=15, step=1, width="small")
-        col_config["連勤Max"] = st.column_config.NumberColumn("連勤Max", min_value=1, max_value=10, step=1, width="small")
-        col_config["勤務曜日"] = st.column_config.TextColumn("勤務曜日", width="small", help="例: 月火木")
-        col_config["祝日不可"] = st.column_config.CheckboxColumn("祝日不可", width="small")
+        for c in _visible_staff_cols:
+            if c in _col_config_defs:
+                col_config[c] = _col_config_defs[c]
     # 勤務希望カラム
     if view_mode != "👤 スタッフ情報":
         shift_options = ["", "日", "夜", "準", "早", "遅", "長", "短", "休", "研", "夜不", "休暇", "明休"]
