@@ -15,7 +15,7 @@ from shift_scheduler import (
     Staff, build_and_solve,
     D, N, A, O, R, V, E, L, ST, LD, SN,
     SHIFTS, DAY_SHIFTS, NIGHT_SHIFTS,
-    TIER_A, TIER_AB, TIER_B, TIER_C, VALID_TIERS,
+    TIER_A, TIER_AB, TIER_B, TIER_CP, TIER_C, VALID_TIERS,
     _get_holidays_and_days_off, _write_one_sheet,
     SETTINGS_DEF, SETTINGS_KEYS,
     _parse_staff_list, _parse_requests, _parse_settings,
@@ -171,7 +171,7 @@ def check_skill_pairing(schedule, names, tiers, num_days, year, month):
         warn_days: list of dict（注意日）
         ok_days: int
     """
-    tier_rank = {TIER_A: 4, TIER_AB: 3, TIER_B: 2, TIER_C: 1}
+    tier_rank = {TIER_A: 5, TIER_AB: 4, TIER_B: 3, TIER_CP: 2, TIER_C: 1}
     wdj = ["月", "火", "水", "木", "金", "土", "日"]
     fwd = date(year, month, 1).weekday()
     bad_days = []
@@ -192,9 +192,14 @@ def check_skill_pairing(schedule, names, tiers, num_days, year, month):
         if max_rank == 1:  # 全員C（新人のみ）
             bad_days.append({
                 "日": day_label, "夜勤メンバー": members_str,
-                "問題": "🚨 全員C（新人のみ）",
+                "問題": "🚨 全員通常C",
             })
-        elif max_rank == 2:  # 最高がB
+        elif max_rank == 2:  # 最高がC+
+            bad_days.append({
+                "日": day_label, "夜勤メンバー": members_str,
+                "問題": "🚨 最高がC+（A/AB/B不在）",
+            })
+        elif max_rank == 3:  # 最高がB
             warn_days.append({
                 "日": day_label, "夜勤メンバー": members_str,
                 "問題": "⚠ A/AB不在（Bが最高）",
@@ -786,15 +791,16 @@ def _generate_template_excel(year, month, num_staff=20):
     legend_start_row = 4 + total_rows + 2
     ws_staff.cell(row=legend_start_row, column=1, value="📖 Tier定義").font = Font(bold=True, size=11, color="548235")
     tier_defs = [
-        ("A", "ベテラン・リーダー格（夜勤リーダー）"),
-        ("AB", "中堅・リーダー代行可"),
-        ("B", "一人立ち済み・通常メンバー"),
-        ("C", "新人・経験浅い（A/AB/Bとペアに）"),
+        ("A", "ベテラン・リーダー格（日勤/夜勤リーダー単独可）"),
+        ("AB", "中堅・リーダー代行可（夜勤リーダー可）"),
+        ("B", "一人立ち済み（B+B, B+C族の夜勤ペアは禁止）"),
+        ("C+", "C既卒（C+C+, C++Cペア禁止／A/AB/B下で夜勤可）"),
+        ("C", "新人・経験浅い（必ずA/AB/Bと夜勤ペア）"),
     ]
     for i, (tier, desc) in enumerate(tier_defs):
         ws_staff.cell(row=legend_start_row + 1 + i, column=1, value=tier).font = Font(bold=True)
         ws_staff.cell(row=legend_start_row + 1 + i, column=2, value=desc).font = Font(color="555555", size=9)
-    ws_staff.cell(row=legend_start_row + 6, column=1, value="📖 カラム説明").font = Font(bold=True, size=11, color="548235")
+    ws_staff.cell(row=legend_start_row + 7, column=1, value="📖 カラム説明").font = Font(bold=True, size=11, color="548235")
     col_defs = [
         ("夜勤専従", "ONで夜勤/明け/休のみのパターン"),
         ("時短", "ONで時短(ST)/早出/遅出/休のみ"),
@@ -811,8 +817,8 @@ def _generate_template_excel(year, month, num_staff=20):
         ("新人卒業日", "その日まで新人、翌日から通常運用（空欄=月末まで新人）"),
     ]
     for i, (col_name, desc) in enumerate(col_defs):
-        ws_staff.cell(row=legend_start_row + 7 + i, column=1, value=col_name).font = Font(bold=True, size=9)
-        ws_staff.cell(row=legend_start_row + 7 + i, column=2, value=desc).font = Font(color="555555", size=9)
+        ws_staff.cell(row=legend_start_row + 8 + i, column=1, value=col_name).font = Font(bold=True, size=9)
+        ws_staff.cell(row=legend_start_row + 8 + i, column=2, value=desc).font = Font(color="555555", size=9)
 
     # ================================================================
     # Sheet 3: 勤務希望（名前・Tierはスタッフ情報から数式参照）
@@ -1423,10 +1429,11 @@ with tab1:
             st.markdown("""
 | Tier | 説明 | 夜勤の役割 |
 |------|------|-----------|
-| **A** | ベテラン・リーダー格 | 夜勤リーダー（必ずA/ABが1人以上） |
-| **AB** | 中堅・リーダー代行可 | Aが不在時にリーダー代行 |
-| **B** | 一人立ち済み | 通常メンバー（B+Cだけのペアは回避） |
-| **C** | 新人・経験浅い | 通常メンバー（必ずA/AB/Bとペアに） |
+| **A** | ベテラン・リーダー格 | 日勤/夜勤リーダー単独可（必ずA/ABが1人以上） |
+| **AB** | 中堅・リーダー代行可 | Aが不在時に夜勤リーダー代行 |
+| **B** | 一人立ち済み | B+B/B+C族の夜勤ペアは**禁止**（ハード） |
+| **C+** | C既卒（経験数ヶ月〜数年） | C+C+/C++通常Cペア禁止、A/AB下で夜勤可 |
+| **C** | 新人・経験浅い | 必ずA/AB/Bと夜勤ペア（C+Cペア禁止） |
 
 **各カラムの説明:**
 - **夜勤専従**: ONにすると夜勤・明け・休のみの勤務パターンになります
@@ -1530,7 +1537,7 @@ with tab1:
 
     # --- column_config 構築 ---
     _col_config_defs = {
-        "Tier": st.column_config.SelectboxColumn("Tier", options=["A", "AB", "B", "C"], width="small"),
+        "Tier": st.column_config.SelectboxColumn("Tier", options=["A", "AB", "B", "C+", "C"], width="small"),
         "夜勤専従": st.column_config.CheckboxColumn("夜勤専従", width="small"),
         "時短": st.column_config.CheckboxColumn("時短", width="small"),
         "週勤務": st.column_config.NumberColumn("週勤務", min_value=1, max_value=7, step=1, width="small"),
@@ -2240,7 +2247,7 @@ with tab5:
                 tier_counts[t] = tier_counts.get(t, 0) + 1
             tier_df = pd.DataFrame([
                 {"Tier": t, "人数": tier_counts.get(t, 0)}
-                for t in ["A", "AB", "B", "C"]
+                for t in ["A", "AB", "B", "C+", "C"]
             ])
             st.dataframe(tier_df, use_container_width=True, hide_index=True)
             st.bar_chart(tier_df.set_index("Tier"), height=180)
