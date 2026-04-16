@@ -296,6 +296,24 @@ def create_template():
 # ローカルExcel読み込み
 # ============================================================
 
+def _is_truthy(val):
+    """○/◯/TRUE/1/任意の非ゼロ数値をTrueとして判定"""
+    s = str(val).strip() if val is not None else ""
+    if s in ("○", "◯", "TRUE", "True", "1"):
+        return True
+    try:
+        return float(s) != 0
+    except (ValueError, TypeError):
+        return False
+
+def _to_int(val):
+    """数値文字列/float → int、無効値 → None"""
+    s = str(val).strip() if val is not None else ""
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return None
+
 def _parse_staff_list(rows):
     """行データからStaffリストを生成 (rows: list of lists, header skip済み)"""
     staff = []
@@ -309,27 +327,23 @@ def _parse_staff_list(rows):
         if tier not in VALID_TIERS:
             print(f"⚠ '{name}' Tier '{tier}' 不正 → スキップ")
             continue
-        ded = str(row[2]).strip() in ("○", "◯", "TRUE", "True", "1") if len(row) > 2 else False
+        ded = _is_truthy(row[2]) if len(row) > 2 else False
         # 時短フラグ（新カラム: index 3）— 旧フォーマット(10列)では週勤務がindex3
         # 新フォーマット(11列)検出: len>=11 なら時短あり
         if len(row) >= 11:
-            short_t = str(row[3]).strip() in ("○", "◯", "TRUE", "True", "1") if len(row) > 3 else False
+            short_t = _is_truthy(row[3]) if len(row) > 3 else False
             col_offset = 4  # 時短の次から
         else:
             short_t = False
             col_offset = 3  # 旧フォーマット: 時短列なし
-        weekly_str = str(row[col_offset]).strip() if len(row) > col_offset else ""
-        weekly = int(weekly_str) if weekly_str.isdigit() else None
+        weekly = _to_int(row[col_offset]) if len(row) > col_offset else None
         prev = str(row[col_offset+1]).strip() if len(row) > col_offset+1 else ""
         if prev not in ("夜", "明", ""):
             print(f"⚠ '{name}' 前月末 '{prev}' 不正（夜/明/空欄）→ 無視")
             prev = ""
-        n_min_str = str(row[col_offset+2]).strip() if len(row) > col_offset+2 else ""
-        n_max_str = str(row[col_offset+3]).strip() if len(row) > col_offset+3 else ""
-        c_max_str = str(row[col_offset+4]).strip() if len(row) > col_offset+4 else ""
-        n_min = int(n_min_str) if n_min_str.isdigit() else None
-        n_max = int(n_max_str) if n_max_str.isdigit() else None
-        c_max = int(c_max_str) if c_max_str.isdigit() else None
+        n_min = _to_int(row[col_offset+2]) if len(row) > col_offset+2 else None
+        n_max = _to_int(row[col_offset+3]) if len(row) > col_offset+3 else None
+        c_max = _to_int(row[col_offset+4]) if len(row) > col_offset+4 else None
         # 勤務曜日: "月火木" → {0, 1, 3}
         wd_str = str(row[col_offset+5]).strip() if len(row) > col_offset+5 else ""
         wd_map = {"月":0, "火":1, "水":2, "木":3, "金":4, "土":5, "日":6}
@@ -341,18 +355,10 @@ def _parse_staff_list(rows):
                     work_days.add(wd_map[ch])
             if not work_days:
                 work_days = None
-        # 祝日不可
-        no_hol_str = str(row[col_offset+6]).strip() if len(row) > col_offset+6 else ""
-        no_hol = no_hol_str in ("○", "◯", "TRUE", "True", "1")
-        # 土日不可
-        no_we_str = str(row[col_offset+7]).strip() if len(row) > col_offset+7 else ""
-        no_we = no_we_str in ("○", "◯", "TRUE", "True", "1")
-        # 夜勤研修
-        nt_str = str(row[col_offset+8]).strip() if len(row) > col_offset+8 else ""
-        night_tr = nt_str in ("○", "◯", "TRUE", "True", "1")
-        # 研修夜勤回数
-        nt_max_str = str(row[col_offset+9]).strip() if len(row) > col_offset+9 else ""
-        nt_max = int(nt_max_str) if nt_max_str.isdigit() else None
+        no_hol = _is_truthy(row[col_offset+6]) if len(row) > col_offset+6 else False
+        no_we = _is_truthy(row[col_offset+7]) if len(row) > col_offset+7 else False
+        night_tr = _is_truthy(row[col_offset+8]) if len(row) > col_offset+8 else False
+        nt_max = _to_int(row[col_offset+9]) if len(row) > col_offset+9 else None
         staff.append(Staff(name, tier, ded, weekly, prev, n_min, n_max, c_max,
                            work_days, no_hol, short_t, no_we, night_tr, nt_max))
     if not staff:
