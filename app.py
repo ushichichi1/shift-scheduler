@@ -360,6 +360,203 @@ def _reqs_to_df(reqs_dict, staff_list, num_days):
     return pd.DataFrame(req_rows)
 
 
+def _render_load_preview(staff_df):
+    """読み込んだスタッフ情報の要約プレビューを表示。
+    属性ごとにグループ化して「意図通りに読めているか」を1秒で確認できるようにする。
+    論理エラーや要確認項目も警告として表示。
+    """
+    if staff_df is None or staff_df.empty:
+        return
+    # 有効な名前行のみ
+    df = staff_df.dropna(subset=["名前"]).copy()
+    df = df[df["名前"].astype(str).str.strip() != ""]
+    if df.empty:
+        return
+
+    n_total = len(df)
+
+    # Tier分布
+    tier_counts = df["Tier"].fillna("").astype(str).str.strip().value_counts()
+    tier_order = ["A", "AB", "B", "C+", "C"]
+    tier_str = " / ".join(
+        f"{t}:{int(tier_counts.get(t, 0))}" for t in tier_order if tier_counts.get(t, 0) > 0
+    )
+    other_tiers = [t for t in tier_counts.index if t not in tier_order and t]
+    if other_tiers:
+        tier_str += " / " + " / ".join(f"{t}:{int(tier_counts[t])}" for t in other_tiers)
+
+    # ヘルパ: Trueっぽい値判定
+    def _is_true(v):
+        if isinstance(v, bool):
+            return v
+        s = str(v).strip().lower()
+        return s in ("true", "1", "◯", "○", "yes")
+
+    # 各カテゴリ抽出
+    def _names_where(mask):
+        return df.loc[mask, "名前"].astype(str).tolist()
+
+    # 夜勤しない人（夜勤Max=0）
+    def _is_zero(v):
+        try:
+            return v is not None and v != "" and float(v) == 0
+        except (ValueError, TypeError):
+            return False
+    no_night = _names_where(df["夜勤Max"].apply(_is_zero))
+
+    # 新人
+    new_hires = _names_where(df["新人"].apply(_is_true))
+    nh_details = []
+    for _, row in df[df["新人"].apply(_is_true)].iterrows():
+        grad = row.get("新人卒業日")
+        if grad is None or grad == "":
+            nh_details.append(f"{row['名前']}(月末まで)")
+        else:
+            try:
+                nh_details.append(f"{row['名前']}({int(float(grad))}日まで)")
+            except Exception:
+                nh_details.append(f"{row['名前']}(月末まで)")
+
+    # パートタイム（週勤務あり）
+    def _pt_label(row):
+        wk = row.get("週勤務")
+        try:
+            if wk is not None and wk != "" and float(wk) > 0:
+                return f"{row['名前']}(週{int(float(wk))})"
+        except Exception:
+            pass
+        return None
+    pt_list = [x for x in df.apply(_pt_label, axis=1).tolist() if x]
+
+    # 夜勤専従
+    dedicated = _names_where(df["夜勤専従"].apply(_is_true))
+
+    # 時短
+    short_time = _names_where(df["時短"].apply(_is_true))
+
+    # 夜勤研修
+    def _tr_label(row):
+        if _is_true(row.get("夜勤研修")):
+            tm = row.get("研修夜勤回数")
+            try:
+                if tm is not None and tm != "":
+                    return f"{row['名前']}(計{int(float(tm))}回)"
+            except Exception:
+                pass
+            return f"{row['名前']}(回数未指定)"
+        return None
+    training = [x for x in df.apply(_tr_label, axis=1).tolist() if x]
+
+    # 前月繰越
+    def _pm_label(row):
+        pm = str(row.get("前月末") or "").strip()
+        if pm in ("夜", "明"):
+            return f"{row['名前']}({pm})"
+        return None
+    prev_month = [x for x in df.apply(_pm_label, axis=1).tolist() if x]
+
+    # 曜日/祝日/土日制限
+    def _wd_label(row):
+        parts = []
+        wd = str(row.get("勤務曜日") or "").strip()
+        if wd:
+            parts.append(wd)
+        if _is_true(row.get("祝日不可")):
+            parts.append("祝日×")
+        if _is_true(row.get("土日不可")):
+            parts.append("土日×")
+        if parts:
+            return f"{row['名前']}({'/'.join(parts)})"
+        return None
+    day_restrict = [x for x in df.apply(_wd_label, axis=1).tolist() if x]
+
+    # === 論理エラー検出 ===
+    warnings = []
+    errors = []
+    for _, row in df.iterrows():
+        name = row["名前"]
+        tier = str(row.get("Tier") or "").strip()
+        # Tierチェック
+        if tier not in ("A", "AB", "B", "C+", "C"):
+            errors.append(f"**{name}**: Tier '{tier}' が不正（A/AB/B/C+/C のいずれかが必要）")
+        # 時短 x 週勤務
+        if _is_true(row.get("時短")):
+            wk = row.get("週勤務")
+            if wk is None or wk == "":
+                warnings.append(f"**{name}**: 時短=◯ ですが週勤務が未指定（時短は通常パートタイム運用）")
+        # 夜勤研修 x 研修夜勤回数
+        if _is_true(row.get("夜勤研修")):
+            tm = row.get("研修夜勤回数")
+            if tm is None or tm == "":
+                warnings.append(f"**{name}**: 夜勤研修=◯ ですが研修夜勤回数が未指定")
+        # 夜勤専従 x Tier
+        if _is_true(row.get("夜勤専従")) and tier in ("C", "C+"):
+            warnings.append(f"**{name}**: 夜勤専従=◯ ですが Tier={tier}（通常Aリーダー資格者が担当）")
+        # 夜勤Min > 夜勤Max
+        nmin = row.get("夜勤Min")
+        nmax = row.get("夜勤Max")
+        try:
+            if (nmin is not None and nmin != "" and nmax is not None and nmax != ""
+                    and float(nmin) > float(nmax)):
+                errors.append(f"**{name}**: 夜勤Min({int(float(nmin))}) > 夜勤Max({int(float(nmax))}) は不可能")
+        except (ValueError, TypeError):
+            pass
+        # 新人が夜勤する設定（情報として表示）
+        # ※ 新人でも夜勤可の運用あり → エラーではなく"確認事項"
+
+    # 新人で夜勤する可能性がある人
+    nh_with_night = []
+    for _, row in df[df["新人"].apply(_is_true)].iterrows():
+        nmax = row.get("夜勤Max")
+        try:
+            if nmax is None or nmax == "" or float(nmax) > 0:
+                # None=設定値(通常5)を使う、>0=夜勤する
+                nh_with_night.append(str(row["名前"]))
+        except Exception:
+            nh_with_night.append(str(row["名前"]))
+
+    # === レンダリング ===
+    with st.expander(f"📋 読み込み結果サマリー（{n_total}人）— クリックして確認", expanded=True):
+        st.markdown(f"**🏷️ Tier構成**: {tier_str}")
+
+        cols = st.columns(2)
+        with cols[0]:
+            if no_night:
+                st.markdown(f"**🚫 夜勤しない人（Max=0）** [{len(no_night)}人]  \n{', '.join(no_night)}")
+            if new_hires:
+                st.markdown(f"**🎓 新人** [{len(new_hires)}人]  \n{', '.join(nh_details)}")
+            if pt_list:
+                st.markdown(f"**⏰ パートタイム** [{len(pt_list)}人]  \n{', '.join(pt_list)}")
+            if short_time:
+                st.markdown(f"**🪶 時短** [{len(short_time)}人]  \n{', '.join(short_time)}")
+        with cols[1]:
+            if dedicated:
+                st.markdown(f"**🌙 夜勤専従** [{len(dedicated)}人]  \n{', '.join(dedicated)}")
+            if training:
+                st.markdown(f"**🏃 夜勤研修** [{len(training)}人]  \n{', '.join(training)}")
+            if prev_month:
+                st.markdown(f"**🎯 前月繰越** [{len(prev_month)}人]  \n{', '.join(prev_month)}")
+            if day_restrict:
+                st.markdown(f"**📆 勤務制限** [{len(day_restrict)}人]  \n{', '.join(day_restrict)}")
+
+        # 警告・エラー
+        if errors:
+            st.error("❌ **入力エラー**（このままでは動作不正）")
+            for e in errors:
+                st.markdown(f"- {e}")
+        if warnings:
+            st.warning("⚠️ **要確認**")
+            for w in warnings:
+                st.markdown(f"- {w}")
+        if nh_with_night:
+            st.info(
+                f"ℹ️ **確認事項**: 新人で夜勤する設定の人がいます: {', '.join(nh_with_night)}"
+                f"（新人夜勤時はA必須のハード制約が自動適用されます。夜勤させない場合は夜勤Max=0に設定）"
+            )
+        if not errors and not warnings and not nh_with_night:
+            st.success("✅ 論理エラー・要確認事項なし")
+
+
 _SETTINGS_WIDGET_MAP = {
     "year": "inp_year", "month": "inp_month",
     "min_day_staff": "inp_min_day", "min_day_staff_excl_new": "inp_min_day_excl",
@@ -1364,9 +1561,10 @@ with tab0:
     # 読み込み状況
     st.markdown("---")
     if st.session_state.data_loaded:
-        n_staff = len(st.session_state.staff_df.dropna(subset=["名前"]))
         n_staff = len([n for n in st.session_state.staff_df["名前"].dropna() if str(n).strip()])
         st.success(f"✅ データ読み込み済み（{n_staff}人）→ 「スタッフ・勤務希望」タブで確認・編集できます")
+        # 読み込み結果サマリー（Layer 2+3: 意図通り読めてるか1秒で確認）
+        _render_load_preview(st.session_state.staff_df)
     else:
         st.info("💡 テンプレートをDLして記入 → アップロード、またはスプレッドシートから読み込んでください")
 
