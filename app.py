@@ -13,7 +13,7 @@ import jpholiday
 
 from shift_scheduler import (
     Staff, build_and_solve,
-    D, N, A, O, R, V, E, L, ST, LD, SN,
+    D, N, A, O, R, V, E, L, ST, LD, SN, I,
     SHIFTS, DAY_SHIFTS, NIGHT_SHIFTS,
     TIER_A, TIER_AB, TIER_B, TIER_CP, TIER_C, VALID_TIERS,
     _get_holidays_and_days_off, _write_one_sheet,
@@ -290,12 +290,12 @@ def check_staffing_ratio(schedule, names, r_dedicated, r_weekly,
 
 SHIFT_DISPLAY = {
     D: "日", N: "夜", A: "明", O: "休", R: "研", V: "暇",
-    E: "早", L: "遅", ST: "短", LD: "長", SN: "準",
+    E: "早", L: "遅", ST: "短", LD: "長", SN: "準", I: "委",
     "夜不": "夜不", "休暇": "休暇", "明休": "明休",
 }
 SHIFT_REVERSE = {
     "日": D, "夜": N, "明": A, "休": O, "研": R, "暇": V,
-    "早": E, "遅": L, "短": ST, "長": LD, "準": SN,
+    "早": E, "遅": L, "短": ST, "長": LD, "準": SN, "委": I,
     "夜不": "夜不", "休暇": "休暇", "明休": "明休",
 }
 # シフト説明（ツールチップ用）
@@ -360,10 +360,11 @@ def _reqs_to_df(reqs_dict, staff_list, num_days):
     return pd.DataFrame(req_rows)
 
 
-def _render_load_preview(staff_df):
+def _render_load_preview(staff_df, requests_df=None):
     """読み込んだスタッフ情報の要約プレビューを表示。
     属性ごとにグループ化して「意図通りに読めているか」を1秒で確認できるようにする。
     論理エラーや要確認項目も警告として表示。
+    requests_df を渡すと委員会予定等の希望ベースの情報も表示。
     """
     if staff_df is None or staff_df.empty:
         return
@@ -545,6 +546,32 @@ def _render_load_preview(staff_df):
             )
         if not errors and not warnings and not nh_with_night:
             st.success("✅ 論理エラー・要確認事項なし")
+
+        # 委員会予定の集計（希望データがあれば表示）
+        if requests_df is not None and not requests_df.empty:
+            committee_items = []  # list of (name, day)
+            day_cols = [c for c in requests_df.columns if str(c).isdigit()]
+            for _, rq_row in requests_df.iterrows():
+                name_v = str(rq_row.get("名前") or "").strip()
+                if not name_v:
+                    continue
+                for dc in day_cols:
+                    v = str(rq_row.get(dc) or "").strip()
+                    if v == "委":
+                        committee_items.append((name_v, int(dc)))
+            if committee_items:
+                # 日付ごとに集計
+                from collections import defaultdict
+                by_day = defaultdict(list)
+                for nm, dd in committee_items:
+                    by_day[dd].append(nm)
+                day_summary = ", ".join(
+                    f"{d}日({'/'.join(by_day[d])})" for d in sorted(by_day.keys())
+                )
+                st.info(
+                    f"🏛️ **委員会予定** [{len(committee_items)}件]: {day_summary}"
+                    f"（各日A/AB同席バックアップが自動で確保されます）"
+                )
 
 
 _SETTINGS_WIDGET_MAP = {
@@ -897,6 +924,7 @@ def _generate_template_excel(year, month, num_staff=20):
         ("短", "時短", "8:45〜16:00 (6.25h)", "○"),     # 時短スタッフ用
         ("休", "公休", "—", "○"),
         ("研", "研修", "—", "○"),
+        ("委", "委員会(勤務中に離席/A・AB同席必須)", "—", "○"),
         ("夜不", "夜勤不可(希望専用)", "—", "○"),
         ("休暇", "有給休暇(希望専用)", "—", "○"),
         ("明休", "明または休(希望専用)", "—", "○"),
@@ -1079,7 +1107,8 @@ def _generate_template_excel(year, month, num_staff=20):
         ("準", "短夜勤 (17:00〜翌5:00 / 12h)"), ("早", "早出 (7:00〜16:00)"),
         ("遅", "遅出 (12:00〜21:00)"), ("長", "長日勤 (8:45〜21:00 / 12h)"),
         ("短", "時短 (8:45〜16:00 / 6.25h)"), ("休", "公休"),
-        ("研", "研修"), ("夜不", "この日は夜勤不可"),
+        ("研", "研修"), ("委", "委員会 (A/AB同席必須)"),
+        ("夜不", "この日は夜勤不可"),
         ("休暇", "有給休暇"), ("明休", "明または休"),
     ]
     for i, (sym, desc) in enumerate(shift_legend):
@@ -1127,7 +1156,7 @@ def _parse_uploaded_excel(uploaded_file, year, month):
         gs_settings = _parse_settings(rows)
 
         # --- 勤務種別設定セクションの読み取り ---
-        _all_shift_syms = {"日", "夜", "準", "早", "遅", "長", "短", "休", "研", "夜不", "休暇", "明休"}
+        _all_shift_syms = {"日", "夜", "準", "早", "遅", "長", "短", "休", "研", "委", "夜不", "休暇", "明休"}
         _found_shift_section = False
         _enabled = []
         for r in range(4 + len(SETTINGS_KEYS), ws.max_row + 1):
@@ -1342,8 +1371,8 @@ op_rules = {
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔄 使用シフト種別")
 # ICU二交代制デフォルト: 日/夜/短(時短)/休/研 + 希望専用(夜不/休暇/明休)
-_all_shift_symbols = ["日", "夜", "準", "早", "遅", "長", "短", "休", "研", "夜不", "休暇", "明休"]
-_icu_default = ["日", "夜", "短", "休", "研", "夜不", "休暇", "明休"]
+_all_shift_symbols = ["日", "夜", "準", "早", "遅", "長", "短", "休", "研", "委", "夜不", "休暇", "明休"]
+_icu_default = ["日", "夜", "短", "休", "研", "委", "夜不", "休暇", "明休"]
 _default_enabled = st.session_state.get("enabled_shifts", _icu_default)
 enabled_shifts = st.sidebar.multiselect(
     "有効なシフト種別",
@@ -1462,7 +1491,8 @@ with tab0:
                     ["準", "短夜勤(17:00-翌5:00)"], ["早", "早出(7:00-16:00)"],
                     ["遅", "遅出(12:00-21:00)"], ["長", "長日勤(8:45-21:00)"],
                     ["短", "時短(8:45-16:00)"], ["休", "公休"],
-                    ["研", "研修"], ["夜不", "夜勤不可"], ["休暇", "有給休暇"],
+                    ["研", "研修"], ["委", "委員会(A/AB同席必須)"],
+                    ["夜不", "夜勤不可"], ["休暇", "有給休暇"],
                     ["明休", "明または休"],
                 ]
                 import gspread.utils as _gu
@@ -1518,7 +1548,7 @@ with tab0:
                             _apply_settings(gs_settings)
                         st.session_state.enabled_shifts = gs_settings.get(
                             "enabled_shifts",
-                            ["日", "夜", "短", "休", "研", "夜不", "休暇", "明休"])
+                            ["日", "夜", "短", "休", "研", "委", "夜不", "休暇", "明休"])
                         st.session_state.staff_df = _staff_to_df(staff_list)
                         st.session_state.requests_df = _reqs_to_df(reqs, staff_list, num_days)
                         st.session_state.data_loaded = True
@@ -1554,7 +1584,7 @@ with tab0:
         n_staff = len([n for n in st.session_state.staff_df["名前"].dropna() if str(n).strip()])
         st.success(f"✅ データ読み込み済み（{n_staff}人）→ 「スタッフ・勤務希望」タブで確認・編集できます")
         # 読み込み結果サマリー（Layer 2+3: 意図通り読めてるか1秒で確認）
-        _render_load_preview(st.session_state.staff_df)
+        _render_load_preview(st.session_state.staff_df, st.session_state.get("requests_df"))
     else:
         st.info("💡 テンプレートをDLして記入 → アップロード、またはスプレッドシートから読み込んでください")
 
@@ -1761,8 +1791,8 @@ with tab1:
     # 勤務希望カラム
     if view_mode != "👤 スタッフ情報":
         _enabled_set = set(st.session_state.get("enabled_shifts",
-                            ["日", "夜", "準", "早", "遅", "長", "短", "休", "研", "夜不", "休暇", "明休"]))
-        shift_options = [""] + [s for s in ["日", "夜", "準", "早", "遅", "長", "短", "休", "研", "夜不", "休暇", "明休"]
+                            ["日", "夜", "準", "早", "遅", "長", "短", "休", "研", "委", "夜不", "休暇", "明休"]))
+        shift_options = [""] + [s for s in ["日", "夜", "準", "早", "遅", "長", "短", "休", "研", "委", "夜不", "休暇", "明休"]
                                 if s in _enabled_set]
         for d in range(1, num_days + 1):
             col_config[str(d)] = st.column_config.SelectboxColumn(
@@ -2113,7 +2143,7 @@ with tab4:
         else:
             st.caption("⚠ セルを直接編集できます。変更後「変更を保存」を押してください。")
             _en = set(st.session_state.get("enabled_shifts", []))
-            _sym_map = {"準": SN, "早": E, "遅": L, "長": LD, "短": ST}
+            _sym_map = {"準": SN, "早": E, "遅": L, "長": LD, "短": ST, "委": I}
             shift_options_edit = [D, N, A, O, R, V] + [v for k, v in _sym_map.items() if k in _en]
             col_cfg_edit = {
                 "名前": st.column_config.TextColumn("名前", disabled=True, width="small"),

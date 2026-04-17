@@ -61,16 +61,19 @@ L  = "遅"   # 遅出: 12:00〜21:00 (8h) 日勤系
 ST = "短"   # 時短: 8:45〜16:00 (6.25h) 育児・介護対応
 LD = "長"   # 長日勤: 8:45〜21:00 (12h) 翌日休推奨
 SN = "準"   # 短夜勤: 17:00〜翌5:00 (12h) 夜勤系・翌日明け
+I  = "委"   # 委員会: 勤務日としてカウントされるが時間中に離席→A/ABバックアップ必須
 
-SHIFTS = [D, N, A, O, R, V, E, L, ST, LD, SN]
+SHIFTS = [D, N, A, O, R, V, E, L, ST, LD, SN, I]
 # 日勤系シフト（日勤人数カウントに含む）
-DAY_SHIFTS = [D, E, L, ST, LD]
+DAY_SHIFTS = [D, E, L, ST, LD, I]
+# リーダー判定用の純粋な日勤系（委=離席枠は含まない）
+PURE_DAY_SHIFTS = [D, E, L, ST, LD]
 # 夜勤系シフト（夜勤人数カウントに含む）
 NIGHT_SHIFTS = [N, SN]
 # 夜勤系ごとの時間数（72h計算用）
 NIGHT_HOURS_MAP = {N: 16, SN: 12}  # デフォルト値 / 実際は設定値で上書き
 
-VALID_REQUEST = {D, N, O, R, E, L, ST, LD, SN, "夜不", "休暇", "明休"}
+VALID_REQUEST = {D, N, O, R, E, L, ST, LD, SN, I, "夜不", "休暇", "明休"}
 TIER_A = "A"; TIER_AB = "AB"; TIER_B = "B"; TIER_CP = "C+"; TIER_C = "C"
 VALID_TIERS = {TIER_A, TIER_AB, TIER_B, TIER_CP, TIER_C}
 MAX_REQUEST_DAYS = 7
@@ -103,6 +106,7 @@ FS  = {
     "短": _PF(start_color="F0FFF0", end_color="F0FFF0", fill_type="solid"),  # 時短: 薄緑系
     "長": _PF(start_color="FFF5CC", end_color="FFF5CC", fill_type="solid"),  # 長日勤: 薄黄緑
     "準": _PF(start_color="2E75B6", end_color="2E75B6", fill_type="solid"),  # 短夜勤: 濃青
+    "委": _PF(start_color="FFE699", end_color="FFE699", fill_type="solid"),  # 委員会: 金色系
 }
 FT = {
     TIER_A:  _PF(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid"),
@@ -895,7 +899,7 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
     if requests:
         print(f"希望: {len(requests)}人")
         for s, rq in requests.items():
-            sn = {D:"日", N:"夜", O:"休", R:"研", "夜不":"夜不", "休暇":"休暇", "明休":"明休"}
+            sn = {D:"日", N:"夜", O:"休", R:"研", I:"委", "夜不":"夜不", "休暇":"休暇", "明休":"明休"}
             print(f"  {s}: {', '.join(f'{d}日={sn.get(t,t)}' for d,t in sorted(rq.items()))}")
     if num_patterns > 1:
         print(f"\n生成パターン数: {num_patterns}")
@@ -922,8 +926,8 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
 
     for s in names:
         if dedicated.get(s):
-            # 専従: 日勤系(R/E/L/ST/LD)は不要（Dは希望日のみ後で個別処理）
-            for t in [R, E, L, ST, LD]:
+            # 専従: 日勤系(R/E/L/ST/LD/I)は不要（Dは希望日のみ後で個別処理）
+            for t in [R, E, L, ST, LD, I]:
                 _excluded.add((s, t))
         if short_time_map.get(s):
             # 時短: D/N/SN/LD は不要 → STのみ使用
@@ -1352,6 +1356,22 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
             if nl_eff:
                 prob += pulp.lpSum(x[s, d, t] for s in nl_eff for t in NIGHT_SHIFTS) >= 1
 
+    # ── 委員会バックアップ制約（ハード） ──
+    # 委員会(I)の人は勤務時間中に離席 → 当日純粋日勤系にA or AB（委員会以外）が1人以上必要
+    # 委員会がない日はこの制約は自動的に緩和される（従来通り）
+    ab_or_a_pool = [s for s in (a_staff + ab_staff)]
+    if ab_or_a_pool:
+        n_names = max(1, len(names))
+        for d in days:
+            # その日の委員会人数
+            committee_d = pulp.lpSum(x[s, d, I] for s in names)
+            # 当日のA/AB（新人除く）× 純粋日勤系（委=離席枠を除く）
+            aa_eff = [s for s in ab_or_a_pool if not is_new_hire_on(s, d)]
+            backup_d = pulp.lpSum(x[s, d, t] for s in aa_eff for t in PURE_DAY_SHIFTS)
+            # committee_d >= 1 のとき backup_d >= 1 を強制
+            # backup_d * n_names >= committee_d : int backup_d は committee_d >= 1 で自動的に 1 以上
+            prob += backup_d * n_names >= committee_d
+
     # ── 新人/研修が夜勤に入る日はA(夜勤リーダー資格者)必須（ハード） ──
     # 新人の夜勤参加時はA不在不可
     if a_night_leader and new_hire_staff:
@@ -1381,6 +1401,20 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
         for d in days:
             if d not in vac_set:
                 prob += x[s, d, V] == 0
+
+    # 委員会(I)は希望がある日のみ — それ以外は禁止（管理者割当のみ）
+    committee_days = {}  # {staff_name: set of day_indices}
+    for s, reqs_s in requests.items():
+        if s not in names:
+            continue
+        for day_num, shift_type in reqs_s.items():
+            if shift_type == I and 1 <= day_num <= num_days:
+                committee_days.setdefault(s, set()).add(day_num - 1)
+    for s in names:
+        cs = committee_days.get(s, set())
+        for d in days:
+            if d not in cs:
+                prob += x[s, d, I] == 0
 
     # 公休日数制約（フルタイム全スタッフ：通常+専従）
     # 公休 = 休(O) の日数を公休日数に合わせる（ハード制約）
@@ -1437,6 +1471,9 @@ def build_and_solve(staff_list, requests, settings, num_patterns=1,
                 elif shift_type == R:
                     # 研修: ハード制約（勤務日数に含むが日勤人数には含めない）
                     prob += x[s, d_idx, R] == 1
+                elif shift_type == I:
+                    # 委員会: ハード制約（日勤人数にカウント、但しA/ABバックアップ必須）
+                    prob += x[s, d_idx, I] == 1
                 else:
                     key = (s, d_idx)
                     req_miss[key] = pulp.LpVariable(f"rmiss_{s}_{d_idx}", cat=pulp.LpBinary)
