@@ -935,7 +935,7 @@ def _parse_uploaded_excel(uploaded_file, year, month):
         ws = wb["設定"]
         rows = []
         for r in range(4, 4 + len(SETTINGS_KEYS)):
-            row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, 4)]
+            row_vals = [("" if ws.cell(row=r, column=c).value is None else ws.cell(row=r, column=c).value) for c in range(1, 4)]
             rows.append(row_vals)
         gs_settings = _parse_settings(rows)
 
@@ -974,7 +974,7 @@ def _parse_uploaded_excel(uploaded_file, year, month):
             name_val = ws_si.cell(row=r, column=1).value
             if not name_val or not str(name_val).strip():
                 continue
-            s_vals = [ws_si.cell(row=r, column=c).value or "" for c in range(1, n_staff_cols + 1)]
+            s_vals = [("" if ws_si.cell(row=r, column=c).value is None else ws_si.cell(row=r, column=c).value) for c in range(1, n_staff_cols + 1)]
             staff_rows.append(s_vals)
         if staff_rows:
             staff_list = _parse_staff_list(staff_rows)
@@ -996,8 +996,8 @@ def _parse_uploaded_excel(uploaded_file, year, month):
                     continue
                 r_vals = [str(name_val).strip()]
                 for d in range(1, num_days + 1):
-                    v = ws_rq.cell(row=r, column=day_start + d - 1).value or ""
-                    r_vals.append(v)
+                    _v = ws_rq.cell(row=r, column=day_start + d - 1).value
+                    r_vals.append("" if _v is None else _v)
                 req_rows.append(r_vals)
             if req_rows:
                 reqs = _parse_requests(req_rows, staff_names, num_days)
@@ -1011,13 +1011,13 @@ def _parse_uploaded_excel(uploaded_file, year, month):
             name_val = ws.cell(row=r, column=1).value
             if not name_val or not str(name_val).strip():
                 continue
-            s_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, n_staff_cols + 2)]
+            s_vals = [("" if ws.cell(row=r, column=c).value is None else ws.cell(row=r, column=c).value) for c in range(1, n_staff_cols + 2)]
             staff_rows.append(s_vals)
             day_start = n_staff_cols + 1
             r_vals = [str(name_val).strip()]
             for d in range(1, num_days + 1):
-                v = ws.cell(row=r, column=day_start + d - 1).value or ""
-                r_vals.append(v)
+                _v = ws.cell(row=r, column=day_start + d - 1).value
+                r_vals.append("" if _v is None else _v)
             req_rows.append(r_vals)
         if staff_rows:
             staff_list = _parse_staff_list(staff_rows)
@@ -1030,7 +1030,7 @@ def _parse_uploaded_excel(uploaded_file, year, month):
             ws = wb["スタッフ一覧"]
             staff_rows = []
             for r in range(2, ws.max_row + 1):
-                row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, 13)]
+                row_vals = [("" if ws.cell(row=r, column=c).value is None else ws.cell(row=r, column=c).value) for c in range(1, 13)]
                 if str(row_vals[0]).strip():
                     staff_rows.append(row_vals)
             staff_list = _parse_staff_list(staff_rows)
@@ -1039,7 +1039,7 @@ def _parse_uploaded_excel(uploaded_file, year, month):
             staff_names = [s.name for s in staff_list]
             req_rows = []
             for r in range(5, ws.max_row + 1):
-                row_vals = [ws.cell(row=r, column=c).value or "" for c in range(1, num_days + 2)]
+                row_vals = [("" if ws.cell(row=r, column=c).value is None else ws.cell(row=r, column=c).value) for c in range(1, num_days + 2)]
                 if str(row_vals[0]).strip():
                     req_rows.append(row_vals)
             reqs = _parse_requests(req_rows, staff_names, num_days)
